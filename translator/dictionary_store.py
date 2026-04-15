@@ -6,6 +6,7 @@ import json
 import os
 import re
 import sys
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,8 +16,21 @@ from urllib import error, parse, request
 import yaml
 
 
-APP_NAME = "SRT Translation Engine"
+APP_NAME = "SRTranslate"
 MANIFEST_FILENAME = "dictionary_manifest.json"
+FREEDICT_GENERATED_INDEX_URL = "https://download.freedict.org/generated/"
+LANGUAGE_CODE_MAP: dict[str, tuple[str, str]] = {
+    "ar": ("Arabic", "ara"),
+    "bn": ("Bengali", "ben"),
+    "de": ("German", "deu"),
+    "es": ("Spanish", "spa"),
+    "fa": ("Persian", "fas"),
+    "fr": ("French", "fra"),
+    "id": ("Indonesian", "ind"),
+    "ms": ("Malay", "msa"),
+    "tr": ("Turkish", "tur"),
+    "ur": ("Urdu", "urd"),
+}
 
 
 @dataclass(slots=True)
@@ -30,6 +44,21 @@ class StoredDictionary:
     @property
     def display_name(self) -> str:
         return self.name
+
+
+@dataclass(slots=True)
+class LanguageDatasetOption:
+    source_code: str
+    target_code: str
+    source_label: str
+    target_label: str
+    source_iso3: str
+    target_iso3: str
+    source_url: str
+
+    @property
+    def label(self) -> str:
+        return f"{self.source_label} -> {self.target_label} (FreeDict)"
 
 
 def app_storage_dir(base_dir: str | Path | None = None) -> Path:
@@ -105,6 +134,58 @@ def download_dictionary(
     )
 
 
+def list_language_dataset_options(
+    *,
+    source_code: str = "en",
+    timeout_seconds: int = 20,
+) -> list[LanguageDatasetOption]:
+    source_label = "English" if source_code == "en" else source_code
+    source_iso3 = "eng" if source_code == "en" else source_code
+    try:
+        with request.urlopen(FREEDICT_GENERATED_INDEX_URL, timeout=timeout_seconds) as response:
+            html = response.read().decode("utf-8", errors="ignore")
+    except error.URLError as exc:
+        raise RuntimeError(f"Could not load free language datasets: {exc}") from exc
+
+    options: list[LanguageDatasetOption] = []
+    for code, (label, iso3) in sorted(LANGUAGE_CODE_MAP.items(), key=lambda item: item[1][0].lower()):
+        pair_slug = f"{source_iso3}-{iso3}"
+        if re.search(rf'href="{re.escape(pair_slug)}/"', html, flags=re.IGNORECASE) is None:
+            continue
+        options.append(
+            LanguageDatasetOption(
+                source_code=source_code,
+                target_code=code,
+                source_label=source_label,
+                target_label=label,
+                source_iso3=source_iso3,
+                target_iso3=iso3,
+                source_url=_freedict_dataset_url(source_iso3, iso3),
+            )
+        )
+    return options
+
+
+def download_language_dataset(
+    target_code: str,
+    *,
+    source_code: str = "en",
+    base_dir: str | Path | None = None,
+    timeout_seconds: int = 90,
+) -> StoredDictionary:
+    options = list_language_dataset_options(source_code=source_code, timeout_seconds=timeout_seconds)
+    selected = next((option for option in options if option.target_code == target_code), None)
+    if selected is None:
+        target_label = LANGUAGE_CODE_MAP.get(target_code, (target_code, target_code))[0]
+        raise ValueError(f"No free downloadable dataset is currently available for {source_code} -> {target_label}.")
+    return download_dictionary(
+        selected.source_url,
+        name=f"FreeDict {selected.source_label} - {selected.target_label}",
+        base_dir=base_dir,
+        timeout_seconds=timeout_seconds,
+    )
+
+
 def import_dictionary(
     dictionary_path_input: str | Path,
     name: str | None = None,
@@ -171,6 +252,8 @@ def _write_manifest(records: list[StoredDictionary], base_dir: str | Path | None
 
 
 def _normalize_dictionary_payload(payload: bytes, original_format: str) -> dict[str, object]:
+    if original_format in {"tei", "xml"}:
+        return _normalize_tei_dictionary_payload(payload)
     text = payload.decode("utf-8-sig")
     if original_format in {"yaml", "yml"}:
         loaded = yaml.safe_load(text) or {}
@@ -312,9 +395,41 @@ def _try_normalize_structured_text(text: str) -> dict[str, object] | None:
     return None
 
 
+def _normalize_tei_dictionary_payload(payload: bytes) -> dict[str, object]:
+    try:
+        root = ET.fromstring(payload)
+    except ET.ParseError as exc:
+        raise ValueError("Could not parse TEI/XML dictionary payload.") from exc
+
+    terms: dict[str, str] = {}
+    for entry in root.findall(".//{*}entry"):
+        source_terms = [
+            _collapse_whitespace("".join(node.itertext()))
+            for node in entry.findall(".//{*}form/{*}orth")
+        ]
+        translation_nodes = entry.findall(".//{*}cit[@type='trans']/{*}quote")
+        if not translation_nodes:
+            translation_nodes = entry.findall(".//{*}sense/{*}def")
+        translations = [
+            _collapse_whitespace("".join(node.itertext()))
+            for node in translation_nodes
+        ]
+        translations = [item for item in translations if item]
+        if not translations:
+            continue
+        best_translation = translations[0]
+        for source in source_terms:
+            if source and source not in terms:
+                terms[source] = best_translation
+
+    if not terms:
+        raise ValueError("No bilingual glossary terms could be extracted from the downloaded TEI dictionary.")
+    return {"terms": terms, "do_not_translate": [], "protected_terms": []}
+
+
 def _infer_format(source_hint: str, content_type: str | None, payload: bytes) -> str:
     suffix = Path(parse.urlparse(source_hint).path).suffix.lower().lstrip(".")
-    if suffix in {"yaml", "yml", "json", "csv", "tsv", "txt"}:
+    if suffix in {"yaml", "yml", "json", "csv", "tsv", "txt", "tei", "xml"}:
         return suffix
     if content_type:
         if "json" in content_type:
@@ -328,6 +443,8 @@ def _infer_format(source_hint: str, content_type: str | None, payload: bytes) ->
     sniffed = payload[:64].decode("utf-8-sig", errors="ignore")
     if sniffed.lstrip().startswith("{") or sniffed.lstrip().startswith("["):
         return "json"
+    if sniffed.lstrip().startswith("<?xml") or "<TEI" in sniffed or "<tei" in sniffed:
+        return "tei"
     if "," in sniffed and "\n" in sniffed:
         return "csv"
     return "txt"
@@ -344,6 +461,15 @@ def _name_from_url(source_url: str) -> str:
 def _slugify(value: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9]+", "-", value.strip()).strip("-").lower()
     return cleaned or "dictionary"
+
+
+def _freedict_dataset_url(source_iso3: str, target_iso3: str) -> str:
+    pair = f"{source_iso3}-{target_iso3}"
+    return f"{FREEDICT_GENERATED_INDEX_URL}{pair}/{pair}.tei"
+
+
+def _collapse_whitespace(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def _default_storage_root() -> Path:

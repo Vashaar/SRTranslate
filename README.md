@@ -1,4 +1,4 @@
-# Subtitle Translation And Verification Tool
+# SRTranslate
 
 This project is a local Python CLI for translating `.srt` subtitle files with a reference script in `.pdf`, `.txt`, or `.md` format. It is designed for careful, context-aware subtitle work where meaning, theological precision, historical accuracy, and natural target-language phrasing matter more than literal word substitution.
 

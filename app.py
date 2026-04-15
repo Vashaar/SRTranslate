@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import json
-import logging
 import uuid
-from dataclasses import dataclass
 from pathlib import Path
 
 import streamlit as st
@@ -31,22 +29,6 @@ LANGUAGE_OPTIONS = [
     ("ms", "Malay"),
 ]
 STYLE_OPTIONS = ["literal", "balanced", "natural"]
-
-
-@dataclass
-class RunRecord:
-    run_id: str
-    languages: list[str]
-    artifacts: dict[str, LanguageArtifacts]
-
-
-class StreamlitLogHandler(logging.Handler):
-    def __init__(self) -> None:
-        super().__init__()
-        self.messages: list[str] = []
-
-    def emit(self, record: logging.LogRecord) -> None:
-        self.messages.append(self.format(record))
 
 
 def save_uploaded_file(upload, destination: Path) -> Path:
@@ -128,7 +110,7 @@ def run_translation(
     languages: list[str],
     style_profile: str,
     review_mode: bool,
-) -> RunRecord:
+) -> tuple[str, dict[str, LanguageArtifacts]]:
     config = load_config(APP_DIR / "config.yaml")
     config.raw["style_profile"] = style_profile
 
@@ -154,23 +136,16 @@ def run_translation(
         profile=style_profile,
         review_mode=review_mode,
     )
-    return RunRecord(run_id=run_id, languages=languages, artifacts=artifacts)
-
-
-def init_state() -> None:
-    if "run_history" not in st.session_state:
-        st.session_state.run_history = []
+    return run_id, artifacts
 
 
 def main() -> None:
     st.set_page_config(
-        page_title="Subtitle Translation Tool",
-        page_icon=":globe_with_meridians:",
+        page_title="SRTranslate",
+        page_icon="assets/app_logo.png",
         layout="wide",
     )
-    init_state()
-
-    st.title("Subtitle Translation Tool")
+    st.title("SRTranslate")
     st.caption("Translate SRT subtitles with script-aware context, verification, and review artifacts.")
 
     with st.sidebar:
@@ -188,24 +163,6 @@ def main() -> None:
         review_mode = st.toggle("Review mode", value=True)
         run_clicked = st.button("Start translation", type="primary", use_container_width=True)
 
-    col1, col2 = st.columns([1.1, 0.9])
-    with col1:
-        st.subheader("Instructions")
-        st.markdown(
-            "- Upload an `.srt` subtitle file and a matching script.\n"
-            "- Select one or more target languages.\n"
-            "- Optionally upload a glossary and enable review mode.\n"
-            "- Use the generated reports to inspect uncertain or flagged segments."
-        )
-
-    with col2:
-        st.subheader("Previous Runs")
-        if st.session_state.run_history:
-            for record in reversed(st.session_state.run_history[-5:]):
-                st.caption(f"Run {record.run_id}: {', '.join(record.languages)}")
-        else:
-            st.caption("No previous runs yet.")
-
     if run_clicked:
         if srt_upload is None:
             st.error("Please upload an `.srt` subtitle file.")
@@ -217,17 +174,11 @@ def main() -> None:
             st.error("Please select at least one target language.")
             return
 
-        log_handler = StreamlitLogHandler()
-        log_handler.setFormatter(logging.Formatter("%(levelname)s %(name)s - %(message)s"))
-        pipeline_logger = logging.getLogger("translator.pipeline")
-        pipeline_logger.setLevel(logging.INFO)
-        pipeline_logger.addHandler(log_handler)
-
         progress = st.progress(0, text="Preparing translation run...")
         status_box = st.empty()
         try:
             progress.progress(15, text="Running translation pipeline...")
-            result = run_translation(
+            run_id, artifacts = run_translation(
                 srt_upload=srt_upload,
                 script_upload=script_upload,
                 glossary_upload=glossary_upload,
@@ -235,33 +186,26 @@ def main() -> None:
                 style_profile=style_profile,
                 review_mode=review_mode,
             )
-            st.session_state.run_history.append(result)
             progress.progress(100, text="Translation complete.")
-            status_box.success(f"Run {result.run_id} completed.")
+            status_box.success(f"Run {run_id} completed.")
         except Exception as exc:
             progress.progress(100, text="Run failed.")
             status_box.error(f"Translation failed: {exc}")
-            pipeline_logger.removeHandler(log_handler)
             return
-        pipeline_logger.removeHandler(log_handler)
-
-        if log_handler.messages:
-            with st.expander("Status log", expanded=True):
-                st.code("\n".join(log_handler.messages), language="text")
 
         st.header("Outputs")
-        for language in result.languages:
-            artifacts = result.artifacts[language]
-            report = load_report_summary(artifacts)
+        for language in selected_languages:
+            language_artifacts = artifacts[language]
+            report = load_report_summary(language_artifacts)
             with st.container(border=True):
                 st.subheader(language_label(language))
                 c1, c2, c3 = st.columns(3)
                 c1.metric("Passed", "Yes" if report["passed"] else "Needs review")
                 c2.metric("Issues", int(report["summary"]["issue_count"]))
                 c3.metric("Avg confidence", report["summary"]["average_confidence"])
-                render_downloads(language, artifacts)
-                render_preview(language, artifacts)
-                render_flags(language, artifacts)
+                render_downloads(language, language_artifacts)
+                render_preview(language, language_artifacts)
+                render_flags(language, language_artifacts)
 
 
 if __name__ == "__main__":

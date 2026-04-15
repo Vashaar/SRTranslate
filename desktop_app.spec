@@ -23,7 +23,7 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='SRT Translation Engine Desktop',
+    name='SRTranslate Desktop',
     icon='assets/app_icon.ico',
     debug=False,
     bootloader_ignore_signals=False,
@@ -44,5 +44,5 @@ coll = COLLECT(
     strip=False,
     upx=True,
     upx_exclude=[],
-    name='SRT Translation Engine Desktop',
+    name='SRTranslate Desktop',
 )

@@ -7,7 +7,9 @@ import yaml
 from translator.dictionary_store import (
     dictionary_path,
     download_dictionary,
+    download_language_dataset,
     import_dictionary,
+    list_language_dataset_options,
     list_dictionaries,
 )
 
@@ -33,6 +35,14 @@ class FakeResponse:
 
     def __exit__(self, exc_type, exc, tb) -> None:
         return None
+
+
+class MultiResponseOpener:
+    def __init__(self, mapping: dict[str, FakeResponse]) -> None:
+        self.mapping = mapping
+
+    def __call__(self, url: str, *args, **kwargs) -> FakeResponse:
+        return self.mapping[url]
 
 
 def test_download_dictionary_normalizes_json_mapping(tmp_path: Path, monkeypatch) -> None:
@@ -99,3 +109,55 @@ def test_download_dictionary_supports_text_plain_yaml(tmp_path: Path, monkeypatc
     saved = yaml.safe_load(dictionary_path(record, tmp_path).read_text(encoding="utf-8"))
     assert saved["terms"]["Mercy"] == "Rahma"
     assert saved["protected_terms"] == ["Ibrahim"]
+
+
+def test_list_language_dataset_options_reads_freedict_index(monkeypatch) -> None:
+    payload = b'<html><body><a href="eng-ara/">eng-ara/</a><a href="eng-spa/">eng-spa/</a></body></html>'
+
+    monkeypatch.setattr(
+        "translator.dictionary_store.request.urlopen",
+        lambda *_args, **_kwargs: FakeResponse(payload, "text/html"),
+    )
+
+    options = list_language_dataset_options()
+
+    assert [item.target_code for item in options] == ["ar", "es"]
+    assert options[0].label == "English -> Arabic (FreeDict)"
+
+
+def test_download_language_dataset_supports_tei_payload(tmp_path: Path, monkeypatch) -> None:
+    index_url = "https://download.freedict.org/generated/"
+    tei_url = "https://download.freedict.org/generated/eng-ara/eng-ara.tei"
+    index_payload = b'<html><body><a href="eng-ara/">eng-ara/</a></body></html>'
+    tei_payload = b"""<?xml version='1.0' encoding='UTF-8'?>
+<TEI xmlns='http://www.tei-c.org/ns/1.0'>
+  <text>
+    <body>
+      <entry>
+        <form><orth>peace</orth></form>
+        <sense><cit type='trans'><quote>salam</quote></cit></sense>
+      </entry>
+      <entry>
+        <form><orth>mercy</orth></form>
+        <sense><cit type='trans'><quote>rahma</quote></cit></sense>
+      </entry>
+    </body>
+  </text>
+</TEI>
+"""
+
+    monkeypatch.setattr(
+        "translator.dictionary_store.request.urlopen",
+        MultiResponseOpener(
+            {
+                index_url: FakeResponse(index_payload, "text/html"),
+                tei_url: FakeResponse(tei_payload, "application/xml"),
+            }
+        ),
+    )
+
+    record = download_language_dataset("ar", base_dir=tmp_path)
+
+    saved = yaml.safe_load(dictionary_path(record, tmp_path).read_text(encoding="utf-8"))
+    assert saved["terms"]["peace"] == "salam"
+    assert saved["terms"]["mercy"] == "rahma"
