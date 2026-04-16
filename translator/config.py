@@ -16,8 +16,16 @@ DEFAULT_LANGUAGE_CONFIGS: dict[str, dict[str, Any]] = {
     "es": {"label": "Spanish", "rtl": False, "profile": "balanced", "aliases": ["spanish"]},
     "fa": {"label": "Persian", "rtl": True, "profile": "balanced", "aliases": ["persian", "farsi"]},
     "fr": {"label": "French", "rtl": False, "profile": "balanced", "aliases": ["french"]},
-    "id": {"label": "Indonesian", "rtl": False, "profile": "balanced", "aliases": ["indonesian"]},
+    "hi": {"label": "Hindi", "rtl": False, "profile": "balanced", "aliases": ["hindi"]},
+    "id": {"label": "Indonesian", "rtl": False, "profile": "balanced", "aliases": ["indonesian", "indonesia"]},
+    "it": {"label": "Italian", "rtl": False, "profile": "balanced", "aliases": ["italian"]},
+    "ja": {"label": "Japanese", "rtl": False, "profile": "balanced", "aliases": ["japanese"]},
+    "ko": {"label": "Korean", "rtl": False, "profile": "balanced", "aliases": ["korean"]},
     "ms": {"label": "Malay", "rtl": False, "profile": "balanced", "aliases": ["malay"]},
+    "nl": {"label": "Dutch", "rtl": False, "profile": "balanced", "aliases": ["dutch"]},
+    "pt": {"label": "Portuguese", "rtl": False, "profile": "balanced", "aliases": ["portuguese"]},
+    "ru": {"label": "Russian", "rtl": False, "profile": "balanced", "aliases": ["russian", "russia"]},
+    "sw": {"label": "Swahili", "rtl": False, "profile": "balanced", "aliases": ["swahili"]},
     "tr": {"label": "Turkish", "rtl": False, "profile": "balanced", "aliases": ["turkish"]},
     "ur": {"label": "Urdu", "rtl": True, "profile": "balanced", "aliases": ["urdu"]},
 }
@@ -37,7 +45,11 @@ class AppConfig:
 
     @property
     def provider(self) -> str:
-        return str(self.raw.get("provider", "ollama"))
+        return str(self.raw.get("provider", "lmstudio"))
+
+    @property
+    def target_language(self) -> str:
+        return self.resolve_language_code(str(self.raw.get("target_language", "es")))
 
     @property
     def model(self) -> str:
@@ -47,11 +59,15 @@ class AppConfig:
         provider_specific = self.provider_settings(self.provider).get("model")
         if provider_specific:
             return str(provider_specific)
-        return str("qwen2.5:7b-instruct")
+        return str("qwen2.5-7b-instruct")
 
     @property
     def style_profile(self) -> str:
         return str(self.raw.get("style_profile", "balanced"))
+
+    @property
+    def deen_mode(self) -> bool:
+        return bool(self.raw.get("deen_mode", False))
 
     @property
     def output_dir(self) -> Path:
@@ -152,7 +168,8 @@ class AppConfig:
             for code in self.raw.get("language_settings", {}).keys()
         }
         language_codes = sorted(set(DEFAULT_LANGUAGE_CONFIGS) | configured_codes)
-        return [self.language_config(code) for code in language_codes]
+        languages = [self.language_config(code) for code in language_codes]
+        return sorted(languages, key=lambda language: language.label.lower())
 
     def provider_settings(self, provider_name: str) -> dict[str, Any]:
         nested = dict(self.raw.get("providers", {}).get(provider_name, {}))

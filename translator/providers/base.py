@@ -30,6 +30,9 @@ class TranslationProvider(ABC):
                 glossary_terms=request.glossary_terms,
                 do_not_translate=request.do_not_translate,
                 protected_terms=request.protected_terms,
+                protected_term_equivalents=request.protected_term_equivalents,
+                forced_translations=request.forced_translations,
+                deen_mode=request.deen_mode,
                 target_language_name=request.target_language_name,
                 rtl=request.rtl,
             )

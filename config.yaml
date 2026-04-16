@@ -1,21 +1,21 @@
 source_language: en
+target_language: es
 provider: lmstudio
-model: qwen2.5:7b
+model: qwen2.5-7b-instruct
 temperature: 0.2
 style_profile: balanced
 preserve_timing: true
+deen_mode: false
 lmstudio:
   base_url: http://localhost:1234/v1
-  model: qwen2.5:7b
+  model: qwen2.5-7b-instruct
 runtime:
   prefer_gpu: true
   precision: auto
 providers:
   lmstudio:
     base_url: http://localhost:1234/v1
-    model: qwen2.5:7b
-  ollama:
-    base_url: http://127.0.0.1:11434
+    model: qwen2.5-7b-instruct
   openai:
     model: gpt-5-mini
   manual: {}
@@ -37,12 +37,35 @@ output:
 glossary:
   default_path:
   do_not_translate: []
-  protected_terms: []
+  protected_terms:
+    allah:
+    - Allah
+    quran:
+    - Qur'an
+    - Quran
+    hadith:
+    - Hadith
+    sunnah:
+    - Sunnah
+  forced_translations:
+    prophet:
+      en:
+        singular: Prophet
+        plural: Prophets
+      es:
+        singular: Profeta
+        plural: Profetas
+      fr:
+        singular: Prophète
+        plural: Prophètes
+    messenger:
+      en:
+        singular: Messenger
+        plural: Messengers
+      es:
+        singular: Mensajero
+        plural: Mensajeros
 language_settings:
-  ur:
-    label: Urdu
-    rtl: true
-    profile: balanced
   ar:
     label: Arabic
     rtl: true
@@ -55,27 +78,63 @@ language_settings:
     label: German
     rtl: false
     profile: balanced
-  fa:
-    label: Persian
-    rtl: true
-    profile: balanced
   es:
     label: Spanish
     rtl: false
     profile: balanced
+  fa:
+    label: Persian
+    rtl: true
+    profile: balanced
   fr:
     label: French
+    rtl: false
+    profile: balanced
+  hi:
+    label: Hindi
     rtl: false
     profile: balanced
   id:
     label: Indonesian
     rtl: false
     profile: balanced
+  it:
+    label: Italian
+    rtl: false
+    profile: balanced
+  ja:
+    label: Japanese
+    rtl: false
+    profile: balanced
+  ko:
+    label: Korean
+    rtl: false
+    profile: balanced
   ms:
     label: Malay
+    rtl: false
+    profile: balanced
+  nl:
+    label: Dutch
+    rtl: false
+    profile: balanced
+  pt:
+    label: Portuguese
+    rtl: false
+    profile: balanced
+  ru:
+    label: Russian
+    rtl: false
+    profile: balanced
+  sw:
+    label: Swahili
     rtl: false
     profile: balanced
   tr:
     label: Turkish
     rtl: false
+    profile: balanced
+  ur:
+    label: Urdu
+    rtl: true
     profile: balanced

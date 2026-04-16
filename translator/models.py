@@ -54,6 +54,9 @@ class TranslationRequest:
     glossary_terms: dict[str, str]
     do_not_translate: list[str]
     protected_terms: list[str]
+    protected_term_equivalents: dict[str, list[str]] = field(default_factory=dict)
+    forced_translations: dict[str, dict[str, dict[str, str]]] = field(default_factory=dict)
+    deen_mode: bool = False
     target_language_name: str = ""
     rtl: bool = False
     previous_subtitle_text: str = ""
@@ -88,6 +91,9 @@ class BatchTranslationRequest:
     glossary_terms: dict[str, str]
     do_not_translate: list[str]
     protected_terms: list[str]
+    protected_term_equivalents: dict[str, list[str]] = field(default_factory=dict)
+    forced_translations: dict[str, dict[str, dict[str, str]]] = field(default_factory=dict)
+    deen_mode: bool = False
     target_language_name: str = ""
     rtl: bool = False
 

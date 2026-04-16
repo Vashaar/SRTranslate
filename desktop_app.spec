@@ -2,6 +2,7 @@
 
 provider_modules = [
     "translator.providers.base",
+    "translator.providers.lmstudio_provider",
     "translator.providers.manual_provider",
     "translator.providers.mock",
     "translator.providers.openai_provider",

@@ -11,7 +11,7 @@ from parsers.script_parser import parse_script
 from parsers.srt_parser import build_srt_blocks, parse_srt
 from translator.config import AppConfig
 from translator.factory import build_provider
-from translator.glossary import load_glossary
+from translator.glossary import load_glossary, normalize_forced_translations, normalize_protected_terms
 from translator.memory import TranslationMemory
 from translator.models import (
     AlignmentResult,
@@ -27,6 +27,7 @@ from translator.models import (
 from translator.reporting import ensure_output_dir, write_srt
 from translator.text import clean_translated_text, is_rtl_language, normalize_text, rebalance_subtitle_lines
 from translator.providers.manual_provider import ManualTranslationProvider
+from translator.providers.lmstudio_provider import run_lmstudio_inference_test
 from verifier.validation import validate_and_repair_translation
 
 logger = logging.getLogger(__name__)
@@ -42,11 +43,26 @@ LANGUAGE_LABELS = {
     "es": "Spanish",
     "fa": "Persian",
     "fr": "French",
+    "hi": "Hindi",
     "id": "Indonesian",
+    "it": "Italian",
+    "ja": "Japanese",
+    "ko": "Korean",
     "ms": "Malay",
+    "nl": "Dutch",
+    "pt": "Portuguese",
+    "ru": "Russian",
+    "sw": "Swahili",
     "tr": "Turkish",
     "ur": "Urdu",
 }
+
+
+def run_lmstudio_provider_test(config: AppConfig | None = None) -> dict[str, object]:
+    provider_settings = config.provider_settings("lmstudio") if config is not None else {}
+    base_url = str(provider_settings.get("base_url", "http://localhost:1234/v1"))
+    model = str(provider_settings.get("model", "qwen2.5-7b-instruct"))
+    return run_lmstudio_inference_test(base_url=base_url, model=model)
 
 
 def translate_project(
@@ -128,6 +144,25 @@ def translate_project_with_artifacts(
     alignments = align_subtitles_to_script(source_blocks, script)
     advance("Aligned subtitles to script context")
     glossary = load_glossary(glossary_path or config.raw.get("glossary", {}).get("default_path"))
+    config_glossary = config.raw.get("glossary", {})
+    config_protected_terms, config_protected_equivalents = normalize_protected_terms(
+        config_glossary.get("protected_terms", {})
+    )
+    glossary["protected_term_equivalents"] = {
+        **dict(glossary.get("protected_term_equivalents", {})),
+        **config_protected_equivalents,
+    }
+    glossary["protected_terms"] = list(
+        dict.fromkeys(list(glossary.get("protected_terms", [])) + config_protected_terms)
+    )
+    glossary["do_not_translate"] = list(dict.fromkeys(
+        list(glossary.get("do_not_translate", []))
+        + [str(value).strip() for value in config_glossary.get("do_not_translate", []) if str(value).strip()]
+    ))
+    glossary["forced_translations"] = {
+        **dict(glossary.get("forced_translations", {})),
+        **normalize_forced_translations(config_glossary.get("forced_translations", {})),
+    }
     provider = _build_provider_with_fallback(config)
     device = str(getattr(provider, "device", "CPU"))
     precision = str(getattr(provider, "precision", "fp32"))
@@ -241,6 +276,8 @@ def _translate_language(
     glossary_terms = dict(glossary.get("terms", {}))
     do_not_translate = list(glossary.get("do_not_translate", []))
     protected_terms = list(glossary.get("protected_terms", [])) + do_not_translate
+    protected_term_equivalents = dict(glossary.get("protected_term_equivalents", {}))
+    forced_translations = dict(glossary.get("forced_translations", {}))
     rtl = language_config.rtl
     batch_windows = batch_ranges or _window_ranges(len(source_blocks), config.translation_batch_size)
     for window_number, (start, end) in enumerate(batch_windows, start=1):
@@ -257,6 +294,8 @@ def _translate_language(
             glossary_terms=glossary_terms,
             do_not_translate=do_not_translate,
             protected_terms=protected_terms,
+            protected_term_equivalents=protected_term_equivalents,
+            forced_translations=forced_translations,
             rtl=rtl,
             target_language_name=language_config.label,
             translation_memory=translation_memory,
@@ -373,6 +412,8 @@ def _translate_batch_window(
     glossary_terms: dict[str, str],
     do_not_translate: list[str],
     protected_terms: list[str],
+    protected_term_equivalents: dict[str, list[str]],
+    forced_translations: dict[str, dict[str, dict[str, str]]],
     rtl: bool,
     target_language_name: str,
     translation_memory: TranslationMemory,
@@ -409,6 +450,9 @@ def _translate_batch_window(
             glossary_terms=glossary_terms,
             do_not_translate=do_not_translate,
             protected_terms=protected_terms,
+            protected_term_equivalents=protected_term_equivalents,
+            forced_translations=forced_translations,
+            deen_mode=config.deen_mode,
             rtl=rtl,
         )
         batch_results = _attempt_batch_translation(
@@ -516,6 +560,9 @@ def _translate_single_item_with_retry(
         glossary_terms=batch_request.glossary_terms,
         do_not_translate=batch_request.do_not_translate,
         protected_terms=batch_request.protected_terms,
+        protected_term_equivalents=batch_request.protected_term_equivalents,
+        forced_translations=batch_request.forced_translations,
+        deen_mode=batch_request.deen_mode,
         target_language_name=batch_request.target_language_name,
         rtl=batch_request.rtl,
     )

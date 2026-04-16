@@ -45,18 +45,11 @@ PRESET_OPTIONS = {
         "retry_low_confidence": True,
     },
 }
-RELIGIOUS_SAFE_TERMS = [
-    "Allah",
-    "Quran",
-    "Muhammad",
-    "Moses",
-    "Jesus",
-    "Abraham",
-]
 THEME = {
     "bg": "#08171C",
     "panel": "#10252B",
     "panel_alt": "#16333A",
+    "panel_edge": "#21454E",
     "accent": "#38D7C7",
     "gold": "#F4C542",
     "gold_soft": "#FFE38A",
@@ -79,8 +72,8 @@ class DesktopApp(tk.Tk):
         self._configure_logging()
 
         self.title("SRTranslate")
-        self.geometry("980x720")
-        self.minsize(920, 680)
+        self.geometry("1080x820")
+        self.minsize(980, 760)
         self.configure(bg=THEME["bg"])
 
         self.selected_srt_path: Path | None = None
@@ -100,6 +93,8 @@ class DesktopApp(tk.Tk):
         default_config = load_config(self.paths.config_path)
         self.current_provider_name = default_config.provider
         self.language_options: list[LanguageConfig] = default_config.supported_languages()
+        self.language_by_code = {language.code: language for language in self.language_options}
+        self.language_by_label = {language.label: language for language in self.language_options}
 
         self.srt_path_var = tk.StringVar(value="No subtitle file selected yet.")
         self.script_path_var = tk.StringVar(value="No reference script selected.")
@@ -110,6 +105,9 @@ class DesktopApp(tk.Tk):
         )
         self.test_mode_var = tk.BooleanVar(value=False)
         self.limit_var = tk.StringVar(value="")
+        self.deen_mode_var = tk.BooleanVar(value=default_config.deen_mode)
+        default_target = self.language_by_code.get(default_config.target_language)
+        self.target_language_var = tk.StringVar(value=default_target.label if default_target else "Spanish")
         self.status_var = tk.StringVar(value="Select an SRT file to begin.")
         self.output_var = tk.StringVar(value=str(self.output_base_dir))
         self.progress_var = tk.DoubleVar(value=0.0)
@@ -158,8 +156,10 @@ class DesktopApp(tk.Tk):
         style.configure("App.TFrame", background=THEME["bg"])
         style.configure("Panel.TFrame", background=THEME["panel"])
         style.configure("Hero.TFrame", background=THEME["panel_alt"])
+        style.configure("Card.TFrame", background=THEME["panel"], borderwidth=1, relief="solid")
         style.configure("App.TLabel", background=THEME["bg"], foreground=THEME["text"])
         style.configure("Muted.TLabel", background=THEME["bg"], foreground=THEME["muted"])
+        style.configure("CardTitle.TLabel", background=THEME["panel"], foreground=THEME["gold_soft"], font=("Segoe UI Semibold", 10))
         style.configure(
             "Success.TLabel",
             background=THEME["bg"],
@@ -204,8 +204,8 @@ class DesktopApp(tk.Tk):
             borderwidth=0,
             focusthickness=0,
             focuscolor=THEME["accent"],
-            padding=(14, 8),
-            font=("Segoe UI", 10, "bold"),
+            padding=(16, 9),
+            font=("Segoe UI Semibold", 10),
         )
         style.map(
             "TButton",
@@ -310,56 +310,100 @@ class DesktopApp(tk.Tk):
         ).grid(row=1, column=1, sticky="nw", pady=(6, 0))
 
     def _build_home(self, parent: ttk.Frame) -> None:
-        body = ttk.Frame(parent, style="App.TFrame")
-        body.grid(row=1, column=0, sticky="nsew", pady=(16, 0))
+        shell = ttk.Frame(parent, style="App.TFrame")
+        shell.grid(row=1, column=0, sticky="nsew", pady=(16, 0))
+        shell.columnconfigure(0, weight=1)
+        shell.rowconfigure(0, weight=1)
+
+        self.home_canvas = tk.Canvas(
+            shell,
+            bg=THEME["bg"],
+            highlightthickness=0,
+            bd=0,
+            relief="flat",
+        )
+        self.home_canvas.grid(row=0, column=0, sticky="nsew")
+
+        shell_scrollbar = ttk.Scrollbar(shell, orient="vertical", command=self.home_canvas.yview)
+        shell_scrollbar.grid(row=0, column=1, sticky="ns")
+        self.home_canvas.configure(yscrollcommand=shell_scrollbar.set)
+
+        body = ttk.Frame(self.home_canvas, style="App.TFrame")
         body.columnconfigure(0, weight=1)
         body.rowconfigure(4, weight=1)
+        self._home_window = self.home_canvas.create_window((0, 0), window=body, anchor="nw")
+        body.bind("<Configure>", lambda _event: self.home_canvas.configure(scrollregion=self.home_canvas.bbox("all")))
+        self.home_canvas.bind(
+            "<Configure>",
+            lambda event: self.home_canvas.itemconfigure(self._home_window, width=event.width),
+        )
+        self.home_canvas.bind("<Enter>", lambda _event: self._bind_home_scroll())
+        self.home_canvas.bind("<Leave>", lambda _event: self._unbind_home_scroll())
 
-        actions = ttk.LabelFrame(body, text="Start", padding=16)
+        actions = ttk.LabelFrame(body, text="Workspace", padding=18)
         actions.grid(row=0, column=0, sticky="ew")
         actions.columnconfigure(0, weight=1)
 
-        ttk.Button(actions, text="Select SRT File", command=self._choose_srt).grid(
-            row=0,
-            column=0,
-            sticky="ew",
-        )
+        ttk.Label(actions, text="Subtitle File", style="CardTitle.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Button(actions, text="Select SRT File", command=self._choose_srt).grid(row=1, column=0, sticky="ew")
         ttk.Label(
             actions,
             textvariable=self.srt_path_var,
             style="Muted.TLabel",
-            wraplength=780,
+            wraplength=900,
             justify="left",
-        ).grid(row=1, column=0, sticky="w", pady=(8, 14))
+        ).grid(row=2, column=0, sticky="w", pady=(8, 14))
 
+        ttk.Label(actions, text="Reference Script", style="CardTitle.TLabel").grid(row=3, column=0, sticky="w")
         ttk.Button(
             actions,
             text="Select Reference Script (optional)",
             command=self._choose_script,
-        ).grid(row=2, column=0, sticky="ew")
+        ).grid(row=4, column=0, sticky="ew")
         ttk.Label(
             actions,
             textvariable=self.script_path_var,
             style="Muted.TLabel",
-            wraplength=780,
+            wraplength=900,
             justify="left",
-        ).grid(row=3, column=0, sticky="w", pady=(8, 14))
+        ).grid(row=5, column=0, sticky="w", pady=(8, 14))
 
+        ttk.Label(actions, text="Output Folder", style="CardTitle.TLabel").grid(row=6, column=0, sticky="w")
         ttk.Button(
             actions,
             text="Choose Output Folder",
             command=self._choose_output_dir,
-        ).grid(row=4, column=0, sticky="ew")
+        ).grid(row=7, column=0, sticky="ew")
         ttk.Label(
             actions,
             textvariable=self.output_var,
             style="Muted.TLabel",
-            wraplength=780,
+            wraplength=900,
             justify="left",
-        ).grid(row=5, column=0, sticky="w", pady=(8, 14))
+        ).grid(row=8, column=0, sticky="w", pady=(8, 14))
+
+        quick_panel = ttk.Frame(actions, style="Panel.TFrame")
+        quick_panel.grid(row=9, column=0, sticky="ew", pady=(4, 12))
+        quick_panel.columnconfigure(1, weight=1)
+
+        ttk.Label(quick_panel, text="Target Language").grid(row=0, column=0, sticky="w", padx=(0, 10))
+        self.target_language_combo = ttk.Combobox(
+            quick_panel,
+            textvariable=self.target_language_var,
+            values=[language.label for language in self.language_options],
+            state="readonly",
+        )
+        self.target_language_combo.grid(row=0, column=1, sticky="ew")
+        self.target_language_combo.bind("<<ComboboxSelected>>", self._handle_target_language_change)
+
+        ttk.Checkbutton(
+            quick_panel,
+            text="Deen Mode",
+            variable=self.deen_mode_var,
+        ).grid(row=1, column=0, sticky="w", pady=(10, 0))
 
         self.translate_button = ttk.Button(actions, text="Translate", command=self._start_translation)
-        self.translate_button.grid(row=6, column=0, sticky="ew")
+        self.translate_button.grid(row=10, column=0, sticky="ew")
 
         ttk.Button(
             body,
@@ -367,7 +411,7 @@ class DesktopApp(tk.Tk):
             command=self._toggle_advanced,
         ).grid(row=1, column=0, sticky="w", pady=(14, 8))
 
-        self.advanced_frame = ttk.LabelFrame(body, text="More Options", padding=14)
+        self.advanced_frame = ttk.LabelFrame(body, text="More Options", padding=16)
         self.advanced_frame.grid(row=2, column=0, sticky="ew")
         self.advanced_frame.columnconfigure(1, weight=1)
 
@@ -391,7 +435,7 @@ class DesktopApp(tk.Tk):
             textvariable=self.limit_var,
         ).grid(row=2, column=1, sticky="ew", pady=(0, 12))
 
-        ttk.Label(self.advanced_frame, text="Target languages").grid(row=3, column=0, sticky="w")
+        ttk.Label(self.advanced_frame, text="Additional target languages").grid(row=3, column=0, sticky="w")
         language_panel = ttk.Frame(self.advanced_frame, style="Panel.TFrame")
         language_panel.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(8, 14))
         self.language_vars: dict[str, tk.BooleanVar] = {}
@@ -402,7 +446,8 @@ class DesktopApp(tk.Tk):
                 language_panel,
                 text=language.label,
                 variable=variable,
-            ).grid(row=index // 2, column=index % 2, sticky="w", padx=(0, 18), pady=4)
+                command=lambda code=language.code: self._sync_primary_language_from_checkboxes(code),
+            ).grid(row=index // 3, column=index % 3, sticky="w", padx=(0, 18), pady=4)
 
         ttk.Label(self.advanced_frame, text="Glossary").grid(row=5, column=0, sticky="w")
         self.dictionary_combo = ttk.Combobox(
@@ -433,7 +478,7 @@ class DesktopApp(tk.Tk):
 
         self.advanced_frame.grid_remove()
 
-        status = ttk.LabelFrame(body, text="Progress", padding=14)
+        status = ttk.LabelFrame(body, text="Progress & Performance", padding=16)
         status.grid(row=3, column=0, sticky="ew", pady=(14, 0))
         status.columnconfigure(0, weight=1)
 
@@ -450,7 +495,7 @@ class DesktopApp(tk.Tk):
             status,
             textvariable=self.status_var,
             style="Muted.TLabel",
-            wraplength=780,
+            wraplength=900,
             justify="left",
         ).grid(row=1, column=0, sticky="w", pady=(10, 0))
         ttk.Label(status, textvariable=self.progress_text_var, style="Muted.TLabel").grid(
@@ -478,21 +523,21 @@ class DesktopApp(tk.Tk):
             status,
             textvariable=self.output_var,
             style="Muted.TLabel",
-            wraplength=780,
+            wraplength=900,
             justify="left",
         ).grid(row=5, column=0, sticky="w", pady=(4, 0))
         ttk.Label(
             status,
             textvariable=self.success_var,
             style="Success.TLabel",
-            wraplength=780,
+            wraplength=900,
             justify="left",
         ).grid(row=6, column=0, sticky="w", pady=(12, 0))
         ttk.Label(
             status,
             textvariable=self.warning_var,
             style="Warning.TLabel",
-            wraplength=780,
+            wraplength=900,
             justify="left",
         ).grid(row=7, column=0, sticky="w", pady=(8, 0))
 
@@ -519,9 +564,45 @@ class DesktopApp(tk.Tk):
         debug_scrollbar.grid(row=0, column=1, sticky="ns")
         self.debug_text.configure(yscrollcommand=debug_scrollbar.set)
 
+    def _bind_home_scroll(self) -> None:
+        self.home_canvas.bind_all("<MouseWheel>", self._on_home_scroll)
+
+    def _unbind_home_scroll(self) -> None:
+        self.home_canvas.unbind_all("<MouseWheel>")
+
+    def _on_home_scroll(self, event: tk.Event) -> None:
+        if getattr(event, "delta", 0):
+            self.home_canvas.yview_scroll(int(-event.delta / 120), "units")
+
     def _select_default_languages(self) -> None:
-        if "ar" in self.language_vars:
-            self.language_vars["ar"].set(True)
+        selected_language = self.language_by_label.get(self.target_language_var.get())
+        if selected_language is None:
+            selected_language = self.language_by_code.get("es") or next(iter(self.language_options), None)
+        if selected_language is None:
+            return
+        self.target_language_var.set(selected_language.label)
+        self._set_selected_languages(selected_language.code)
+
+    def _set_selected_languages(self, primary_language_code: str, *, clear_existing: bool = True) -> None:
+        for code, variable in self.language_vars.items():
+            if clear_existing:
+                variable.set(code == primary_language_code)
+            elif code == primary_language_code:
+                variable.set(True)
+
+    def _handle_target_language_change(self, _event: object | None = None) -> None:
+        selected_language = self.language_by_label.get(self.target_language_var.get())
+        if selected_language is None:
+            return
+        self._set_selected_languages(selected_language.code)
+
+    def _sync_primary_language_from_checkboxes(self, code: str) -> None:
+        variable = self.language_vars.get(code)
+        if variable is None or not variable.get():
+            return
+        language = self.language_by_code.get(code)
+        if language is not None:
+            self.target_language_var.set(language.label)
 
     def _toggle_advanced(self) -> None:
         if self.advanced_open.get():
@@ -563,7 +644,15 @@ class DesktopApp(tk.Tk):
             self.output_var.set(str(self.output_base_dir))
 
     def _selected_language_codes(self) -> list[str]:
-        return [language.code for language in self.language_options if self.language_vars[language.code].get()]
+        selected_codes = [
+            language.code
+            for language in self.language_options
+            if self.language_vars.get(language.code) and self.language_vars[language.code].get()
+        ]
+        if selected_codes:
+            return selected_codes
+        selected_language = self.language_by_label.get(self.target_language_var.get())
+        return [selected_language.code] if selected_language is not None else []
 
     def _built_in_glossaries(self) -> list[Path]:
         directory = self.paths.bundled_glossaries_dir
@@ -790,22 +879,18 @@ class DesktopApp(tk.Tk):
         config = load_config(self.paths.config_path)
         preset = PRESET_OPTIONS.get(preset_name, PRESET_OPTIONS["Accurate"])
         style_profile = str(preset["style_profile"])
+        selected_language = self.language_by_label.get(self.target_language_var.get())
 
         config.raw["style_profile"] = style_profile
+        config.raw["deen_mode"] = bool(self.deen_mode_var.get() or preset_name == "Religious-safe")
+        if selected_language is not None:
+            config.raw["target_language"] = selected_language.code
         config.raw.setdefault("translation", {})
         config.raw["translation"]["batch_size"] = int(preset["batch_size"])
         config.raw["translation"]["retry_low_confidence"] = bool(preset["retry_low_confidence"])
 
         config.raw.setdefault("output", {})
         config.raw["output"]["write_review_csv"] = bool(review_mode)
-
-        config.raw.setdefault("glossary", {})
-        protected_terms = [str(item) for item in config.raw["glossary"].get("protected_terms", [])]
-        if preset_name == "Religious-safe":
-            for term in RELIGIOUS_SAFE_TERMS:
-                if term not in protected_terms:
-                    protected_terms.append(term)
-        config.raw["glossary"]["protected_terms"] = protected_terms
 
         return config, style_profile
 
