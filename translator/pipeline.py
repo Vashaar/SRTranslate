@@ -30,6 +30,7 @@ from verifier.validation import validate_and_repair_translation
 
 logger = logging.getLogger(__name__)
 ProgressCallback = Callable[[int, int, str], None]
+DebugMappingCallback = Callable[[str, int, str, str], None]
 LANGUAGE_LABELS = {
     "ar": "Arabic",
     "bn": "Bengali",
@@ -53,6 +54,8 @@ def translate_project(
     profile: str | None = None,
     review_mode: bool = False,
     progress_callback: ProgressCallback | None = None,
+    subtitle_limit: int | None = None,
+    debug_mapping_callback: DebugMappingCallback | None = None,
 ) -> dict[str, Path]:
     artifacts = translate_project_with_artifacts(
         srt_path=srt_path,
@@ -63,6 +66,8 @@ def translate_project(
         profile=profile,
         review_mode=review_mode,
         progress_callback=progress_callback,
+        subtitle_limit=subtitle_limit,
+        debug_mapping_callback=debug_mapping_callback,
     )
     return {lang: result.srt_path for lang, result in artifacts.items()}
 
@@ -76,8 +81,15 @@ def translate_project_with_artifacts(
     profile: str | None = None,
     review_mode: bool = False,
     progress_callback: ProgressCallback | None = None,
+    subtitle_limit: int | None = None,
+    debug_mapping_callback: DebugMappingCallback | None = None,
 ) -> dict[str, LanguageArtifacts]:
     source_blocks = parse_srt(srt_path)
+    original_block_count = len(source_blocks)
+    if subtitle_limit is not None:
+        if subtitle_limit <= 0:
+            raise ValueError("subtitle_limit must be greater than 0 when provided.")
+        source_blocks = source_blocks[:subtitle_limit]
     batch_ranges = _window_ranges(len(source_blocks), config.translation_batch_size)
     total_steps = max(1, 3 + len(langs) * (len(batch_ranges) + 3))
     current_step = 0
@@ -88,7 +100,12 @@ def translate_project_with_artifacts(
         if progress_callback is not None:
             progress_callback(current_step, total_steps, message)
 
-    advance(f"Loaded {len(source_blocks)} subtitle blocks")
+    if subtitle_limit is not None and subtitle_limit < original_block_count:
+        advance(
+            f"Loaded {len(source_blocks)} of {original_block_count} subtitle blocks (limited run)"
+        )
+    else:
+        advance(f"Loaded {len(source_blocks)} subtitle blocks")
     script = parse_script(script_path)
     advance(f"Parsed script from {Path(script_path).name}")
     alignments = align_subtitles_to_script(source_blocks, script)
@@ -144,6 +161,14 @@ def translate_project_with_artifacts(
         advance(f"{lang.upper()}: validation complete")
         corrected_blocks = validation.corrected_blocks
         report = _augment_report_with_fallbacks(validation.report, fallback_block_indices)
+        if debug_mapping_callback is not None:
+            for source_block, corrected_block in zip(source_blocks, corrected_blocks, strict=True):
+                debug_mapping_callback(
+                    language_config.code,
+                    source_block.index,
+                    source_block.text,
+                    corrected_block.text,
+                )
 
         file_stem = _build_output_stem(srt_stem, lang)
         output_srt = output_dir / f"{file_stem}.srt"
@@ -251,7 +276,7 @@ def _translate_language(
 
 def _build_provider_with_fallback(config: AppConfig):
     try:
-        return build_provider(config.provider, config.model)
+        return build_provider(config.provider, config.model, config=config)
     except Exception as exc:
         if config.provider == "manual":
             raise

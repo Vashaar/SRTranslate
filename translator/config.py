@@ -86,7 +86,7 @@ class AppConfig:
 
     @property
     def translation_batch_size(self) -> int:
-        value = int(self.raw.get("translation", {}).get("batch_size", 10))
+        value = int(self.raw.get("translation", {}).get("batch_size", 12))
         return max(5, min(15, value))
 
     @property

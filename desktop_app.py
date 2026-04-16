@@ -38,12 +38,12 @@ PRESET_OPTIONS = {
     },
     "Accurate": {
         "style_profile": "balanced",
-        "batch_size": 8,
+        "batch_size": 12,
         "retry_low_confidence": True,
     },
     "Religious-safe": {
         "style_profile": "literal",
-        "batch_size": 8,
+        "batch_size": 12,
         "retry_low_confidence": True,
     },
 }

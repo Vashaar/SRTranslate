@@ -255,3 +255,116 @@ def test_pipeline_reports_progress_updates(tmp_path: Path) -> None:
     assert progress_events[0][2].startswith("Loaded ")
     assert progress_events[-1][2] == "UR: ready"
     assert progress_events[-1][0] == progress_events[-1][1]
+
+
+def test_pipeline_limits_subtitles_before_batching(tmp_path: Path, monkeypatch) -> None:
+    srt = tmp_path / "input.srt"
+    script = tmp_path / "script.txt"
+    config = tmp_path / "config.yaml"
+    out_dir = tmp_path / "outputs"
+
+    blocks = []
+    script_lines = []
+    for index in range(1, 31):
+        blocks.append(
+            f"{index}\n00:00:{index:02d},000 --> 00:00:{index + 1:02d},000\nLine {index}.\n"
+        )
+        script_lines.append(f"Line {index}.")
+    srt.write_text("\n".join(blocks), encoding="utf-8")
+    script.write_text(" ".join(script_lines), encoding="utf-8")
+    config.write_text(
+        yaml.safe_dump(
+            {
+                "provider": "mock",
+                "model": "mock",
+                "translation": {"batch_size": 12},
+                "output": {"output_dir": str(out_dir), "write_review_csv": False},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class RecordingProvider:
+        def __init__(self) -> None:
+            self.indices: list[int] = []
+            self.batch_sizes: list[int] = []
+
+        def translate_batch(self, request):
+            self.batch_sizes.append(len(request.items))
+            self.indices.extend(item.index for item in request.items)
+            return [
+                TranslationResult(
+                    translated_text=f"translated-{item.index}",
+                    confidence=0.95,
+                    notes=[],
+                    provider_metadata={"provider": "recording"},
+                )
+                for item in request.items
+            ]
+
+    provider = RecordingProvider()
+    monkeypatch.setattr("translator.pipeline.build_provider", lambda *args, **kwargs: provider)
+
+    loaded = load_config(config)
+    outputs = translate_project(
+        str(srt),
+        str(script),
+        ["es"],
+        loaded,
+        review_mode=False,
+        subtitle_limit=20,
+    )
+
+    assert "es" in outputs
+    assert provider.batch_sizes == [12, 8]
+    assert provider.indices == list(range(1, 21))
+    content = (out_dir / "input.es.srt").read_text(encoding="utf-8")
+    assert "translated-20" in content
+    assert "translated-21" not in content
+
+
+def test_pipeline_emits_debug_mapping_in_order(tmp_path: Path) -> None:
+    srt = tmp_path / "input.srt"
+    script = tmp_path / "script.txt"
+    config = tmp_path / "config.yaml"
+    out_dir = tmp_path / "outputs"
+    mappings: list[tuple[str, int, str, str]] = []
+
+    srt.write_text(
+        "\n".join(
+            [
+                "1\n00:00:01,000 --> 00:00:03,000\nHello there.\n",
+                "2\n00:00:04,000 --> 00:00:06,000\nGeneral Kenobi.\n",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    script.write_text("Hello there. General Kenobi.", encoding="utf-8")
+    config.write_text(
+        yaml.safe_dump(
+            {
+                "provider": "mock",
+                "model": "mock",
+                "translation": {"batch_size": 12},
+                "output": {"output_dir": str(out_dir), "write_review_csv": False},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = load_config(config)
+    translate_project(
+        str(srt),
+        str(script),
+        ["es"],
+        loaded,
+        review_mode=False,
+        debug_mapping_callback=lambda language, index, source_text, output_text: mappings.append(
+            (language, index, source_text, output_text)
+        ),
+    )
+
+    assert mappings == [
+        ("es", 1, "Hello there.", "[es] Hello there."),
+        ("es", 2, "General Kenobi.", "[es] General Kenobi."),
+    ]

@@ -40,12 +40,25 @@ def _gpu_available() -> bool:
 class OllamaTranslationProvider(TranslationProvider):
     """Local provider backed by an Ollama server running on localhost."""
 
-    def __init__(self, model: str, base_url: str | None = None) -> None:
+    def __init__(
+        self,
+        model: str,
+        base_url: str | None = None,
+        prefer_gpu: bool = True,
+        precision: str = "auto",
+    ) -> None:
         configured = base_url or os.getenv("OLLAMA_BASE_URL") or "http://127.0.0.1:11434"
         self.base_url = configured.rstrip("/")
         self.model = model
-        self.gpu_available = _gpu_available()
-        self.precision = "fp16" if self.gpu_available else "fp32"
+        detected_gpu = _gpu_available()
+        self.gpu_available = prefer_gpu and detected_gpu
+        normalized_precision = str(precision or "auto").lower()
+        if normalized_precision not in {"auto", "fp16", "fp32"}:
+            normalized_precision = "auto"
+        if normalized_precision == "auto":
+            self.precision = "fp16" if self.gpu_available else "fp32"
+        else:
+            self.precision = normalized_precision
 
     def translate_batch(self, request_payload: BatchTranslationRequest) -> list[TranslationResult]:
         target_language = request_payload.target_language_name or request_payload.target_language
@@ -98,7 +111,7 @@ Batch:
             "prompt": prompt,
             "options": {
                 "temperature": 0.0,
-                "f16_kv": self.gpu_available,
+                "f16_kv": self.precision == "fp16",
             },
         }
         body = json.dumps(payload).encode("utf-8")

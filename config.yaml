@@ -17,6 +17,7 @@ line_rebalancing:
   enabled: false
   max_chars_per_line: 42
 translation:
+  batch_size: 12
   use_script_as_source_of_truth: true
   retry_low_confidence: true
   low_confidence_threshold: 0.7
