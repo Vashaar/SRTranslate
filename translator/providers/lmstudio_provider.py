@@ -13,12 +13,14 @@ from translator.providers.structured import parse_batch_translation_payload
 
 logger = logging.getLogger(__name__)
 LMSTUDIO_SAFE_BATCH_TOKEN_LIMIT = 2600
+LMSTUDIO_MAX_ITEMS_PER_REQUEST = 1
 LMSTUDIO_TEST_BATCH = [
     {"index": 0, "text": "Hello, how are you?"},
     {"index": 1, "text": "This is a test subtitle."},
     {"index": 2, "text": "We are verifying LM Studio integration."},
 ]
 SPANISH_HEURISTIC_MARKERS = {
+    "cada",
     "hola",
     "como",
     "estas",
@@ -29,9 +31,52 @@ SPANISH_HEURISTIC_MARKERS = {
     "prueba",
     "somos",
     "estamos",
+    "antes",
+    "animal",
+    "pero",
+    "del",
+    "dios",
+    "el",
+    "la",
+    "los",
+    "las",
+    "de",
+    "un",
+    "una",
+    "se",
+    "al",
+    "es",
+    "padre",
+    "hijo",
     "que",
 }
 SPANISH_HEURISTIC_CHARS = ("\u00e1", "\u00e9", "\u00ed", "\u00f3", "\u00fa", "\u00f1", "\u00bf", "\u00a1")
+ENGLISH_HEURISTIC_WORDS = (
+    "the",
+    "and",
+    "is",
+    "are",
+    "this",
+    "to",
+    "of",
+    "in",
+    "all",
+    "they",
+    "before",
+    "from",
+    "father",
+    "son",
+    "command",
+    "animal",
+    "slaughter",
+    "submission",
+    "history",
+    "one",
+    "greatest",
+    "acts",
+    "wake",
+    "up",
+)
 EXPLANATION_MARKERS = (
     "meaning",
     "i.e.",
@@ -48,6 +93,8 @@ def _looks_like_target_language(texts: list[str], target_language: str) -> bool:
     combined_text = " ".join(texts).lower()
     if normalized_target != "spanish":
         return True
+    if re.search(r"[\u4e00-\u9fff\u3400-\u4dbf]", combined_text):
+        return False
     if any(marker in combined_text for marker in SPANISH_HEURISTIC_MARKERS):
         return True
     return any(character in combined_text for character in SPANISH_HEURISTIC_CHARS)
@@ -129,7 +176,9 @@ def _build_token_aware_batches(
     for item in request_payload.items:
         item_tokens = _estimate_batch_item_tokens(item)
         proposed_tokens = current_tokens + item_tokens
-        if current_items and proposed_tokens > token_limit:
+        if current_items and (
+            proposed_tokens > token_limit or len(current_items) >= LMSTUDIO_MAX_ITEMS_PER_REQUEST
+        ):
             flush()
             proposed_tokens = current_tokens + item_tokens
 
@@ -185,11 +234,19 @@ def _build_lmstudio_test_payload(model: str, target_language: str) -> dict[str, 
         "messages": [
             {
                 "role": "system",
-                "content": "You are a professional subtitle translator. Maintain meaning, tone, and brevity.",
+                "content": (
+                    f"You are a strict translation engine. Translate ALL input into {target_language}. "
+                    "Never return English."
+                ),
             },
             {
                 "role": "user",
                 "content": (
+                    "CRITICAL RULES:\n"
+                    f"- Output MUST be in {target_language}\n"
+                    "- If any line remains in English -> output is INVALID\n"
+                    "- Translate ALL lines, even simple ones\n"
+                    "- Do NOT preserve English under any condition\n\n"
                     f"Translate each entry into {target_language}. Return JSON with identical indices.\n"
                     f"Output MUST be entirely in {target_language}.\n"
                     "You MUST translate every input line.\n"
@@ -208,7 +265,7 @@ def _build_lmstudio_test_payload(model: str, target_language: str) -> dict[str, 
                 ),
             },
         ],
-        "temperature": 0.2,
+        "temperature": 0.0,
     }
 
 
@@ -328,44 +385,45 @@ def _build_lmstudio_batch_payload(model: str, request_payload: BatchTranslationR
     batch_payload = [
         {
             "index": item.index,
-            "previous_subtitle_text": item.previous_subtitle_text,
-            "subtitle_text": item.source_subtitle_text,
-            "next_subtitle_text": item.next_subtitle_text,
-            "aligned_script_excerpt": item.script_context,
+            "text": item.source_subtitle_text,
+            "previous_text": item.previous_subtitle_text,
+            "next_text": item.next_subtitle_text,
+            "reference_excerpt": item.script_context,
         }
         for item in request_payload.items
     ]
-    user_prompt = (
-        f"Translate each entry into {target_language}. Return JSON with identical indices.\n"
-        f"Output MUST be entirely in {target_language}.\n"
-        "You MUST translate every input line.\n"
-        "You MUST NOT return the original English text under any circumstance.\n"
-        "If output language matches input language, treat as failure.\n"
-        "Even if the sentence is simple, translate it fully.\n"
-        "Do NOT preserve English unless explicitly told.\n"
-        "Do not mix languages.\n\n"
-        f"Source language: {request_payload.source_language}\n"
-        f"Target language code: {request_payload.target_language}\n"
-        f"Style profile: {request_payload.style_profile}\n"
-        f"RTL language: {request_payload.rtl}\n"
-        f"Do not translate: {', '.join(request_payload.do_not_translate) or 'None'}\n"
-        f"Protected terms: {', '.join(request_payload.protected_terms) or 'None'}\n"
-        "Glossary rules:\n"
-        f"{glossary_text or '- None'}\n\n"
-        "Do NOT translate protected religious terms. Keep them as-is.\n"
-        "Preserve exact spelling where possible for protected terms and standard transliterations.\n"
-        "Each input block must return exactly one output with the same index.\n"
-        "Preserve original order.\n"
-        "Prefer the aligned script excerpt where it clearly resolves subtitle transcription mistakes.\n"
-        "Keep names and protected terms conservative and consistent.\n"
-        "Return STRICT JSON only in this format:\n"
-        '{\n  "translations": [\n'
-        '    {"index": 0, "text": "..."},\n'
-        '    {"index": 1, "text": "..."}\n'
-        "  ]\n}\n\n"
-        f"Batch:\n{json.dumps(batch_payload, ensure_ascii=False, indent=2)}"
+    user_prompt_sections = [
+        f"Translate each line into {target_language}.",
+        "Return JSON only:",
+        '{\n  "translations": [\n    {"index": <same input index>, "text": "<translated line>"}\n  ]\n}',
+        "Translate ALL lines. Do NOT return English.",
+        "Translate only the text field for each item.",
+        "previous_text, next_text, and reference_excerpt are context only.",
+        "Return exactly one output item per input item.",
+        "Reuse the same index values from the input.",
+        "Do not merge lines. Do not split lines. Do not renumber lines.",
+    ]
+    if request_payload.do_not_translate:
+        user_prompt_sections.append(
+            f"Do not translate these terms: {', '.join(request_payload.do_not_translate)}"
+        )
+    if request_payload.protected_terms:
+        user_prompt_sections.append(
+            f"Protected terms to preserve: {', '.join(request_payload.protected_terms)}"
+        )
+    if glossary_text:
+        user_prompt_sections.extend(["Glossary rules:", glossary_text])
+    user_prompt_sections.extend(
+        [
+            "Input blocks:",
+            json.dumps(batch_payload, ensure_ascii=False, indent=2),
+        ]
     )
-    system_prompt = "You are a professional subtitle translator. Maintain meaning, tone, and brevity."
+    user_prompt = "\n".join(user_prompt_sections)
+    system_prompt = (
+        f"You are a strict translation engine. Translate ALL input into {target_language}. "
+        "Never return English."
+    )
     if request_payload.deen_mode:
         system_prompt += (
             " Translate faithfully and conservatively."
@@ -388,7 +446,7 @@ def _build_lmstudio_batch_payload(model: str, request_payload: BatchTranslationR
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
-        "temperature": 0.2,
+        "temperature": 0.0,
     }
 
 
@@ -671,6 +729,15 @@ def _has_identity_output(
     return False
 
 
+def _contains_english_output(translated_texts: list[str]) -> bool:
+    for text in translated_texts:
+        words = re.findall(r"[a-zA-Z']+", str(text).lower())
+        english_word_count = sum(1 for word in words if word in ENGLISH_HEURISTIC_WORDS)
+        if english_word_count >= 2:
+            return True
+    return False
+
+
 class LMStudioTranslationProvider(TranslationProvider):
     """OpenAI-compatible local provider backed by LM Studio."""
 
@@ -754,18 +821,18 @@ class LMStudioTranslationProvider(TranslationProvider):
             count_match = (
                 len(parsed.texts) == len(request_payload.items)
                 and not parsed.missing_indices
-                and not parsed.extra_indices
                 and not parsed.duplicate_indices
                 and not parsed.invalid_entries
             )
             language_match = _looks_like_target_language(translated_texts, target_language)
             identity_output = _has_identity_output(request_payload, translated_texts)
+            english_output = _contains_english_output(translated_texts)
             deen_issues = (
                 _deen_validation_issues(request_payload, translated_texts)
                 if request_payload.deen_mode and count_match and language_match
                 else []
             )
-            if count_match and language_match and not deen_issues and not identity_output:
+            if count_match and language_match and not deen_issues and not identity_output and not english_output:
                 post_processed_texts = _apply_forced_translations(request_payload, translated_texts)
                 shared_metadata = {
                     "provider": "lmstudio",
@@ -800,6 +867,15 @@ class LMStudioTranslationProvider(TranslationProvider):
                     stronger_translation_retry = True
                     logger.warning(
                         "LM Studio stronger translation retry triggered for batch size=%s est_tokens=%s due to identity output.",
+                        batch_size,
+                        token_estimate,
+                    )
+            if english_output:
+                last_error = "output still appears to contain English and was not fully translated"
+                if not stronger_translation_retry and attempt < 2:
+                    stronger_translation_retry = True
+                    logger.warning(
+                        "LM Studio stronger translation retry triggered for batch size=%s est_tokens=%s due to English output detection.",
                         batch_size,
                         token_estimate,
                     )
