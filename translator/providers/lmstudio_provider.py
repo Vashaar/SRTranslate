@@ -158,6 +158,7 @@ def _post_lmstudio_chat(
     debug_label: str,
 ) -> tuple[dict[str, object], float]:
     endpoint = f"{base_url.rstrip('/')}/chat/completions"
+    model_name = str(payload.get("model", "")).strip()
     body = json.dumps(payload).encode("utf-8")
     req = request.Request(
         url=endpoint,
@@ -166,6 +167,8 @@ def _post_lmstudio_chat(
         method="POST",
     )
     request_started_at = time.perf_counter()
+    logger.info("LM Studio request URL: %s", endpoint)
+    logger.info("LM Studio model: %s", model_name or "unknown")
     if logger.isEnabledFor(logging.DEBUG):
         logger.debug("%s request: %s", debug_label, json.dumps(payload, ensure_ascii=False, indent=2))
     with request.urlopen(req, timeout=timeout) as response:
@@ -189,6 +192,11 @@ def _build_lmstudio_test_payload(model: str, target_language: str) -> dict[str, 
                 "content": (
                     f"Translate each entry into {target_language}. Return JSON with identical indices.\n"
                     f"Output MUST be entirely in {target_language}.\n"
+                    "You MUST translate every input line.\n"
+                    "You MUST NOT return the original English text under any circumstance.\n"
+                    "If output language matches input language, treat as failure.\n"
+                    "Even if the sentence is simple, translate it fully.\n"
+                    "Do NOT preserve English unless explicitly told.\n"
                     "Do not mix languages.\n\n"
                     "Return STRICT JSON only in this format:\n"
                     '{\n  "translations": [\n'
@@ -210,7 +218,7 @@ def _fallback_lmstudio_test_translations() -> list[dict[str, object]]:
 
 def run_lmstudio_inference_test(
     *,
-    base_url: str = "http://localhost:1234/v1",
+    base_url: str = "http://127.0.0.1:1234/v1",
     model: str = "qwen2.5-7b-instruct",
     target_language: str = "Spanish",
     timeout: int = 60,
@@ -330,6 +338,11 @@ def _build_lmstudio_batch_payload(model: str, request_payload: BatchTranslationR
     user_prompt = (
         f"Translate each entry into {target_language}. Return JSON with identical indices.\n"
         f"Output MUST be entirely in {target_language}.\n"
+        "You MUST translate every input line.\n"
+        "You MUST NOT return the original English text under any circumstance.\n"
+        "If output language matches input language, treat as failure.\n"
+        "Even if the sentence is simple, translate it fully.\n"
+        "Do NOT preserve English unless explicitly told.\n"
         "Do not mix languages.\n\n"
         f"Source language: {request_payload.source_language}\n"
         f"Target language code: {request_payload.target_language}\n"
@@ -384,6 +397,18 @@ def _build_stricter_deen_payload(model: str, request_payload: BatchTranslationRe
     stricter_user = str(payload["messages"][1]["content"])
     stricter_user += "\n\nDo NOT add or remove meaning. Literal faithfulness required."
     payload["messages"][1]["content"] = stricter_user
+    return payload
+
+
+def _build_stronger_translation_retry_payload(
+    model: str,
+    request_payload: BatchTranslationRequest,
+) -> dict[str, object]:
+    payload = _build_lmstudio_batch_payload(model, request_payload)
+    target_language = request_payload.target_language_name or request_payload.target_language
+    stronger_user = str(payload["messages"][1]["content"])
+    stronger_user += f"\n\nYou failed to translate. Translate ALL lines into {target_language}."
+    payload["messages"][1]["content"] = stronger_user
     return payload
 
 
@@ -636,11 +661,21 @@ def _deen_validation_issues(
     return issues
 
 
+def _has_identity_output(
+    request_payload: BatchTranslationRequest,
+    translated_texts: list[str],
+) -> bool:
+    for item, translated_text in zip(request_payload.items, translated_texts, strict=True):
+        if _normalize_term_for_match(item.source_subtitle_text) == _normalize_term_for_match(translated_text):
+            return True
+    return False
+
+
 class LMStudioTranslationProvider(TranslationProvider):
     """OpenAI-compatible local provider backed by LM Studio."""
 
     def __init__(self, model: str, base_url: str | None = None) -> None:
-        configured = base_url or "http://localhost:1234/v1"
+        configured = base_url or "http://127.0.0.1:1234/v1"
         self.base_url = configured.rstrip("/")
         self.model = model
         self.device = "GPU (LM Studio)"
@@ -663,11 +698,14 @@ class LMStudioTranslationProvider(TranslationProvider):
                 token_estimate,
             )
         stricter_deen_retry = False
+        stronger_translation_retry = False
 
         for attempt in range(1, 3):
             payload = (
                 _build_stricter_deen_payload(self.model, request_payload)
                 if stricter_deen_retry
+                else _build_stronger_translation_retry_payload(self.model, request_payload)
+                if stronger_translation_retry
                 else _build_lmstudio_batch_payload(self.model, request_payload)
             )
             try:
@@ -721,12 +759,13 @@ class LMStudioTranslationProvider(TranslationProvider):
                 and not parsed.invalid_entries
             )
             language_match = _looks_like_target_language(translated_texts, target_language)
+            identity_output = _has_identity_output(request_payload, translated_texts)
             deen_issues = (
                 _deen_validation_issues(request_payload, translated_texts)
                 if request_payload.deen_mode and count_match and language_match
                 else []
             )
-            if count_match and language_match and not deen_issues:
+            if count_match and language_match and not deen_issues and not identity_output:
                 post_processed_texts = _apply_forced_translations(request_payload, translated_texts)
                 shared_metadata = {
                     "provider": "lmstudio",
@@ -755,6 +794,15 @@ class LMStudioTranslationProvider(TranslationProvider):
             last_error = "output count mismatch"
             if not language_match:
                 last_error = f"output did not appear to be entirely in {target_language}"
+            if identity_output:
+                last_error = "output matched the input language and was not translated"
+                if not stronger_translation_retry and attempt < 2:
+                    stronger_translation_retry = True
+                    logger.warning(
+                        "LM Studio stronger translation retry triggered for batch size=%s est_tokens=%s due to identity output.",
+                        batch_size,
+                        token_estimate,
+                    )
             if deen_issues:
                 last_error = "; ".join(deen_issues)
                 if not stricter_deen_retry and attempt < 2:

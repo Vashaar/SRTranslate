@@ -11,7 +11,7 @@ from urllib import error, request
 from datetime import datetime
 from pathlib import Path
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, ttk
 
 from PIL import Image, ImageTk
 
@@ -50,8 +50,9 @@ THEME = {
     "panel": "#10252B",
     "panel_alt": "#16333A",
     "panel_edge": "#21454E",
-    "accent": "#38D7C7",
-    "gold": "#F4C542",
+    "accent": "#2FC7B6",
+    "accent_hover": "#47D8C8",
+    "gold": "#D6B447",
     "gold_soft": "#FFE38A",
     "text": "#F5FFFC",
     "muted": "#A9D5CF",
@@ -59,6 +60,7 @@ THEME = {
     "entry_border": "#24545D",
     "success": "#A6F29B",
     "warning": "#FFD87B",
+    "error": "#FF9B8E",
 }
 
 logger = logging.getLogger(__name__)
@@ -116,6 +118,7 @@ class DesktopApp(tk.Tk):
         self.total_time_var = tk.StringVar(value="Total time: --")
         self.batch_time_var = tk.StringVar(value="Latest batch: --")
         self.processed_count_var = tk.StringVar(value="Subtitles processed: 0")
+        self.status_state_var = tk.StringVar(value="Ready")
         self.success_var = tk.StringVar(value="")
         self.warning_var = tk.StringVar(value="")
         self.advanced_open = tk.BooleanVar(value=False)
@@ -158,31 +161,46 @@ class DesktopApp(tk.Tk):
         style.configure("Hero.TFrame", background=THEME["panel_alt"])
         style.configure("Card.TFrame", background=THEME["panel"], borderwidth=1, relief="solid")
         style.configure("App.TLabel", background=THEME["bg"], foreground=THEME["text"])
-        style.configure("Muted.TLabel", background=THEME["bg"], foreground=THEME["muted"])
+        style.configure("Muted.TLabel", background=THEME["bg"], foreground=THEME["muted"], font=("Segoe UI", 10))
+        style.configure("Card.TLabel", background=THEME["panel"], foreground=THEME["text"], font=("Segoe UI", 10))
+        style.configure("Section.TLabel", background=THEME["bg"], foreground=THEME["gold_soft"], font=("Segoe UI Semibold", 10))
         style.configure("CardTitle.TLabel", background=THEME["panel"], foreground=THEME["gold_soft"], font=("Segoe UI Semibold", 10))
         style.configure(
             "Success.TLabel",
             background=THEME["bg"],
             foreground=THEME["success"],
-            font=("Segoe UI", 10, "bold"),
+            font=("Segoe UI Semibold", 10),
         )
         style.configure(
             "Warning.TLabel",
             background=THEME["bg"],
             foreground=THEME["warning"],
-            font=("Segoe UI", 10, "bold"),
+            font=("Segoe UI Semibold", 10),
+        )
+        style.configure(
+            "Error.TLabel",
+            background=THEME["bg"],
+            foreground=THEME["error"],
+            font=("Segoe UI Semibold", 10),
+        )
+        style.configure(
+            "StatusBadge.TLabel",
+            background=THEME["panel_alt"],
+            foreground=THEME["gold_soft"],
+            font=("Segoe UI Semibold", 9),
+            padding=(10, 4),
         )
         style.configure(
             "HeroTitle.TLabel",
             background=THEME["panel_alt"],
             foreground=THEME["gold_soft"],
-            font=("Georgia", 24, "bold"),
+            font=("Segoe UI Semibold", 24),
         )
         style.configure(
             "HeroBody.TLabel",
             background=THEME["panel_alt"],
             foreground=THEME["muted"],
-            font=("Segoe UI", 10),
+            font=("Segoe UI", 11),
         )
         style.configure(
             "TLabelframe",
@@ -195,21 +213,37 @@ class DesktopApp(tk.Tk):
             "TLabelframe.Label",
             background=THEME["panel"],
             foreground=THEME["gold_soft"],
-            font=("Segoe UI", 10, "bold"),
+            font=("Segoe UI Semibold", 10),
         )
         style.configure(
-            "TButton",
+            "Primary.TButton",
             background=THEME["accent"],
             foreground=THEME["bg"],
             borderwidth=0,
             focusthickness=0,
             focuscolor=THEME["accent"],
-            padding=(16, 9),
-            font=("Segoe UI Semibold", 10),
+            padding=(16, 11),
+            font=("Segoe UI Semibold", 11),
+            relief="flat",
         )
         style.map(
-            "TButton",
-            background=[("active", THEME["gold"]), ("disabled", THEME["entry_border"])],
+            "Primary.TButton",
+            background=[("active", THEME["accent_hover"]), ("disabled", THEME["entry_border"])],
+            foreground=[("disabled", THEME["muted"])],
+        )
+        style.configure(
+            "Secondary.TButton",
+            background=THEME["panel_alt"],
+            foreground=THEME["text"],
+            borderwidth=0,
+            focusthickness=0,
+            padding=(14, 9),
+            font=("Segoe UI", 10),
+            relief="flat",
+        )
+        style.map(
+            "Secondary.TButton",
+            background=[("active", THEME["panel_edge"]), ("disabled", THEME["entry_border"])],
             foreground=[("disabled", THEME["muted"])],
         )
         style.configure(
@@ -227,13 +261,14 @@ class DesktopApp(tk.Tk):
             foreground=THEME["text"],
             arrowcolor=THEME["gold"],
             bordercolor=THEME["entry_border"],
+            padding=6,
         )
         style.map(
             "TCombobox",
             fieldbackground=[("readonly", THEME["entry"])],
             selectbackground=[("readonly", THEME["entry"])],
         )
-        style.configure("TCheckbutton", background=THEME["panel"], foreground=THEME["text"])
+        style.configure("TCheckbutton", background=THEME["panel"], foreground=THEME["text"], font=("Segoe UI", 10))
 
         self.option_add("*TCombobox*Listbox.background", THEME["entry"])
         self.option_add("*TCombobox*Listbox.foreground", THEME["text"])
@@ -263,6 +298,7 @@ class DesktopApp(tk.Tk):
         outer = ttk.Frame(self, style="App.TFrame")
         outer.pack(fill="both", expand=True, padx=16, pady=16)
         outer.columnconfigure(0, weight=1)
+        outer.rowconfigure(1, weight=1)
 
         self._build_header(outer)
         self._build_home(outer)
@@ -287,7 +323,7 @@ class DesktopApp(tk.Tk):
             self.event_queue.put(("dependency-error", str(exc)))
 
     def _build_header(self, parent: ttk.Frame) -> None:
-        header = ttk.Frame(parent, style="Hero.TFrame", padding=18)
+        header = ttk.Frame(parent, style="Hero.TFrame", padding=20)
         header.grid(row=0, column=0, sticky="ew")
         header.columnconfigure(1, weight=1)
 
@@ -303,7 +339,7 @@ class DesktopApp(tk.Tk):
         )
         ttk.Label(
             header,
-            text="Translate subtitles with context-aware accuracy",
+            text="Local AI Subtitle Translator",
             style="HeroBody.TLabel",
             wraplength=760,
             justify="left",
@@ -340,79 +376,106 @@ class DesktopApp(tk.Tk):
         self.home_canvas.bind("<Enter>", lambda _event: self._bind_home_scroll())
         self.home_canvas.bind("<Leave>", lambda _event: self._unbind_home_scroll())
 
-        actions = ttk.LabelFrame(body, text="Workspace", padding=18)
-        actions.grid(row=0, column=0, sticky="ew")
-        actions.columnconfigure(0, weight=1)
+        top_section = ttk.Frame(body, style="App.TFrame")
+        top_section.grid(row=0, column=0, sticky="ew")
+        top_section.columnconfigure(0, weight=1)
 
-        ttk.Label(actions, text="Subtitle File", style="CardTitle.TLabel").grid(row=0, column=0, sticky="w")
-        ttk.Button(actions, text="Select SRT File", command=self._choose_srt).grid(row=1, column=0, sticky="ew")
+        title_block = ttk.Frame(top_section, style="App.TFrame")
+        title_block.grid(row=0, column=0, sticky="ew", pady=(0, 12))
+        ttk.Label(title_block, text="Project Setup", style="Section.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(
+            title_block,
+            text="Pick an SRT file, choose the target language, and launch the local translation run.",
+            style="Muted.TLabel",
+            wraplength=920,
+            justify="left",
+        ).grid(row=1, column=0, sticky="w", pady=(4, 0))
+
+        actions = ttk.LabelFrame(body, text="Main Controls", padding=16)
+        actions.grid(row=1, column=0, sticky="ew")
+        actions.columnconfigure(0, weight=1)
+        actions.columnconfigure(1, weight=0)
+
+        ttk.Label(actions, text="SRT File", style="CardTitle.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Button(actions, text="Choose File", command=self._choose_srt, style="Secondary.TButton").grid(
+            row=0,
+            column=1,
+            sticky="e",
+        )
         ttk.Label(
             actions,
             textvariable=self.srt_path_var,
-            style="Muted.TLabel",
+            style="Card.TLabel",
             wraplength=900,
             justify="left",
-        ).grid(row=2, column=0, sticky="w", pady=(8, 14))
+        ).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(8, 16))
 
-        ttk.Label(actions, text="Reference Script", style="CardTitle.TLabel").grid(row=3, column=0, sticky="w")
-        ttk.Button(
-            actions,
-            text="Select Reference Script (optional)",
-            command=self._choose_script,
-        ).grid(row=4, column=0, sticky="ew")
-        ttk.Label(
-            actions,
-            textvariable=self.script_path_var,
-            style="Muted.TLabel",
-            wraplength=900,
-            justify="left",
-        ).grid(row=5, column=0, sticky="w", pady=(8, 14))
-
-        ttk.Label(actions, text="Output Folder", style="CardTitle.TLabel").grid(row=6, column=0, sticky="w")
-        ttk.Button(
-            actions,
-            text="Choose Output Folder",
-            command=self._choose_output_dir,
-        ).grid(row=7, column=0, sticky="ew")
-        ttk.Label(
-            actions,
-            textvariable=self.output_var,
-            style="Muted.TLabel",
-            wraplength=900,
-            justify="left",
-        ).grid(row=8, column=0, sticky="w", pady=(8, 14))
-
-        quick_panel = ttk.Frame(actions, style="Panel.TFrame")
-        quick_panel.grid(row=9, column=0, sticky="ew", pady=(4, 12))
-        quick_panel.columnconfigure(1, weight=1)
-
-        ttk.Label(quick_panel, text="Target Language").grid(row=0, column=0, sticky="w", padx=(0, 10))
+        ttk.Label(actions, text="Target Language", style="CardTitle.TLabel").grid(row=2, column=0, sticky="w")
         self.target_language_combo = ttk.Combobox(
-            quick_panel,
+            actions,
             textvariable=self.target_language_var,
             values=[language.label for language in self.language_options],
             state="readonly",
         )
-        self.target_language_combo.grid(row=0, column=1, sticky="ew")
+        self.target_language_combo.grid(row=3, column=0, columnspan=2, sticky="ew", pady=(8, 16))
         self.target_language_combo.bind("<<ComboboxSelected>>", self._handle_target_language_change)
 
         ttk.Checkbutton(
-            quick_panel,
+            actions,
             text="Deen Mode",
             variable=self.deen_mode_var,
-        ).grid(row=1, column=0, sticky="w", pady=(10, 0))
+        ).grid(row=4, column=0, sticky="w", pady=(0, 16))
 
-        self.translate_button = ttk.Button(actions, text="Translate", command=self._start_translation)
-        self.translate_button.grid(row=10, column=0, sticky="ew")
+        ttk.Label(actions, text="Reference Script (Optional)", style="CardTitle.TLabel").grid(row=5, column=0, sticky="w")
+        ttk.Button(
+            actions,
+            text="Choose File",
+            command=self._choose_script,
+            style="Secondary.TButton",
+        ).grid(row=5, column=1, sticky="e")
+        ttk.Label(
+            actions,
+            textvariable=self.script_path_var,
+            style="Card.TLabel",
+            wraplength=900,
+            justify="left",
+        ).grid(row=6, column=0, columnspan=2, sticky="ew", pady=(8, 16))
+
+        ttk.Label(actions, text="Output Folder", style="CardTitle.TLabel").grid(row=7, column=0, sticky="w")
+        ttk.Button(
+            actions,
+            text="Choose Folder",
+            command=self._choose_output_dir,
+            style="Secondary.TButton",
+        ).grid(row=7, column=1, sticky="e")
+        ttk.Label(
+            actions,
+            textvariable=self.output_var,
+            style="Card.TLabel",
+            wraplength=900,
+            justify="left",
+        ).grid(row=8, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+
+        action_bar = ttk.Frame(body, style="App.TFrame")
+        action_bar.grid(row=2, column=0, sticky="ew", pady=(16, 10))
+        action_bar.columnconfigure(0, weight=1)
+        self.translate_button = ttk.Button(
+            action_bar,
+            text="Translate",
+            command=self._start_translation,
+            style="Primary.TButton",
+        )
+        self.translate_button.grid(row=0, column=0, sticky="ew")
 
         ttk.Button(
             body,
             textvariable=self.advanced_button_var,
             command=self._toggle_advanced,
-        ).grid(row=1, column=0, sticky="w", pady=(14, 8))
+            style="Secondary.TButton",
+        ).grid(row=3, column=0, sticky="w", pady=(0, 10))
 
         self.advanced_frame = ttk.LabelFrame(body, text="More Options", padding=16)
-        self.advanced_frame.grid(row=2, column=0, sticky="ew")
+        self.advanced_frame.grid(row=4, column=0, sticky="ew")
         self.advanced_frame.columnconfigure(1, weight=1)
 
         ttk.Label(self.advanced_frame, text="Translation mode").grid(row=0, column=0, sticky="w")
@@ -478,9 +541,17 @@ class DesktopApp(tk.Tk):
 
         self.advanced_frame.grid_remove()
 
-        status = ttk.LabelFrame(body, text="Progress & Performance", padding=16)
-        status.grid(row=3, column=0, sticky="ew", pady=(14, 0))
+        status = ttk.LabelFrame(body, text="Status", padding=16)
+        status.grid(row=5, column=0, sticky="ew", pady=(14, 0))
         status.columnconfigure(0, weight=1)
+        status.columnconfigure(1, weight=0)
+
+        ttk.Label(status, textvariable=self.status_state_var, style="StatusBadge.TLabel").grid(
+            row=0,
+            column=0,
+            sticky="w",
+            pady=(0, 10),
+        )
 
         self.progress = ttk.Progressbar(
             status,
@@ -489,7 +560,7 @@ class DesktopApp(tk.Tk):
             variable=self.progress_var,
             style="Accent.Horizontal.TProgressbar",
         )
-        self.progress.grid(row=0, column=0, sticky="ew")
+        self.progress.grid(row=1, column=0, columnspan=2, sticky="ew")
 
         ttk.Label(
             status,
@@ -497,15 +568,15 @@ class DesktopApp(tk.Tk):
             style="Muted.TLabel",
             wraplength=900,
             justify="left",
-        ).grid(row=1, column=0, sticky="w", pady=(10, 0))
+        ).grid(row=2, column=0, columnspan=2, sticky="w", pady=(10, 0))
         ttk.Label(status, textvariable=self.progress_text_var, style="Muted.TLabel").grid(
-            row=2,
+            row=3,
             column=0,
             sticky="w",
             pady=(6, 0),
         )
         metrics = ttk.Frame(status, style="App.TFrame")
-        metrics.grid(row=3, column=0, sticky="ew", pady=(12, 0))
+        metrics.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(12, 0))
         metrics.columnconfigure(0, weight=1)
         metrics.columnconfigure(1, weight=1)
         ttk.Label(metrics, textvariable=self.device_var, style="Muted.TLabel").grid(row=0, column=0, sticky="w")
@@ -514,7 +585,7 @@ class DesktopApp(tk.Tk):
         ttk.Label(metrics, textvariable=self.processed_count_var, style="Muted.TLabel").grid(row=1, column=1, sticky="w", pady=(4, 0))
 
         ttk.Label(status, text="Output folder", style="Muted.TLabel").grid(
-            row=4,
+            row=5,
             column=0,
             sticky="w",
             pady=(12, 0),
@@ -525,24 +596,24 @@ class DesktopApp(tk.Tk):
             style="Muted.TLabel",
             wraplength=900,
             justify="left",
-        ).grid(row=5, column=0, sticky="w", pady=(4, 0))
+        ).grid(row=6, column=0, columnspan=2, sticky="w", pady=(4, 0))
         ttk.Label(
             status,
             textvariable=self.success_var,
             style="Success.TLabel",
             wraplength=900,
             justify="left",
-        ).grid(row=6, column=0, sticky="w", pady=(12, 0))
+        ).grid(row=7, column=0, columnspan=2, sticky="w", pady=(12, 0))
         ttk.Label(
             status,
             textvariable=self.warning_var,
-            style="Warning.TLabel",
+            style="Error.TLabel",
             wraplength=900,
             justify="left",
-        ).grid(row=7, column=0, sticky="w", pady=(8, 0))
+        ).grid(row=8, column=0, columnspan=2, sticky="w", pady=(8, 0))
 
-        debug_panel = ttk.LabelFrame(body, text="Debug Output", padding=10)
-        debug_panel.grid(row=4, column=0, sticky="nsew", pady=(14, 0))
+        debug_panel = ttk.LabelFrame(body, text="Footer Log", padding=10)
+        debug_panel.grid(row=6, column=0, sticky="nsew", pady=(14, 0))
         debug_panel.columnconfigure(0, weight=1)
         debug_panel.rowconfigure(0, weight=1)
 
@@ -716,19 +787,40 @@ class DesktopApp(tk.Tk):
         glossary_path = self.glossary_options.get(selected)
         return str(glossary_path) if glossary_path else None
 
+    def _set_inline_feedback(
+        self,
+        state: str,
+        message: str,
+        *,
+        success: str = "",
+        warning: str = "",
+    ) -> None:
+        self.status_state_var.set(state)
+        self.status_var.set(message)
+        self.success_var.set(success)
+        self.warning_var.set(warning)
+
     def _start_translation(self) -> None:
         if self.selected_srt_path is None:
-            messagebox.showerror("Missing subtitle file", "Please select an SRT subtitle file.")
+            self._set_inline_feedback(
+                "Error",
+                "Please select an SRT subtitle file before starting.",
+                warning="Missing subtitle file.",
+            )
             return
 
         languages = self._selected_language_codes()
         if not languages:
-            messagebox.showerror("Missing target languages", "Choose at least one target language in More Options.")
+            self._set_inline_feedback(
+                "Error",
+                "Choose at least one target language before starting.",
+                warning="No target language selected.",
+            )
             return
         try:
             subtitle_limit = self._resolve_subtitle_limit()
         except ValueError as exc:
-            messagebox.showerror("Invalid limit", str(exc))
+            self._set_inline_feedback("Error", str(exc), warning="Invalid limit.")
             return
 
         self.current_output_dir = None
@@ -736,10 +828,9 @@ class DesktopApp(tk.Tk):
         self.output_var.set(str(self.output_base_dir))
         self.progress_var.set(0)
         self.progress_text_var.set("Starting translation")
-        self.success_var.set("")
-        self.warning_var.set("")
         self._reset_runtime_insights()
-        self._set_busy(True, "Running translation...")
+        self._set_inline_feedback("Processing...", "Running translation...")
+        self._set_busy(True, "Processing...")
 
         threading.Thread(
             target=self._translation_worker,
@@ -1028,25 +1119,29 @@ class DesktopApp(tk.Tk):
             imported_label = f"Library: {record.name}"
             if imported_label in self.glossary_options:
                 self.dictionary_var.set(imported_label)
-            self._set_busy(False, f"Glossary '{record.name}' is ready.")
+            self._set_inline_feedback("Ready", f"Glossary '{record.name}' is ready.")
+            self._set_busy(False, self.status_var.get())
             return
 
         if event == "dependency-ready":
             self.provider_ready = True
             if not self.translate_button.instate(["disabled"]):
-                self.status_var.set(str(payload))
+                self._set_inline_feedback("Ready", str(payload))
             return
 
         if event == "dependency-error":
             self.provider_ready = False
             if not self.translate_button.instate(["disabled"]):
-                self.status_var.set("Local translation engine is not ready yet.")
-                self.warning_var.set(str(payload))
+                self._set_inline_feedback(
+                    "Error",
+                    "Local translation engine is not ready yet.",
+                    warning=str(payload),
+                )
             return
 
         if event == "dictionary-error":
-            self._set_busy(False, "Glossary import failed.")
-            messagebox.showerror("Glossary error", str(payload))
+            self._set_inline_feedback("Error", "Glossary import failed.", warning=str(payload))
+            self._set_busy(False, self.status_var.get())
             return
 
         if event == "progress":
@@ -1057,6 +1152,7 @@ class DesktopApp(tk.Tk):
             percent = round((current / total) * 100, 1)
             self.progress_var.set(percent)
             self.progress_text_var.set(f"{percent:.1f}% complete")
+            self.status_state_var.set("Processing...")
             self.status_var.set(message)
             return
 
@@ -1073,42 +1169,43 @@ class DesktopApp(tk.Tk):
             if total_blocks and fallback_count >= total_blocks:
                 self.progress_var.set(0)
                 self.progress_text_var.set("Translation failed")
-                self.success_var.set("")
-                self.warning_var.set("")
-                self._set_busy(False, "Translation failed.")
-                messagebox.showerror(
-                    "Translation failed",
-                    "No translated subtitles were produced.\n\n"
-                    "SRTranslate could not reach the translation engine, so the source text was preserved instead. "
-                    f"Start {self.current_provider_name} and run the translation again.",
+                self._set_inline_feedback(
+                    "Error",
+                    "Translation failed.",
+                    warning=(
+                        "No translated subtitles were produced. "
+                        f"Start {self.current_provider_name} and run the translation again."
+                    ),
                 )
+                self._set_busy(False, self.status_var.get())
                 return
 
-            self.success_var.set("Translation finished successfully.")
             if fallback_count:
                 warning_text = f"{fallback_count} lines could not be translated properly."
-                self.warning_var.set(warning_text)
-                self._set_busy(False, f"Finished with {fallback_count} flagged lines.")
-                self._open_path(run_dir)
-                messagebox.showwarning(
-                    "Translation completed with warnings",
-                    f"Your files are ready in:\n{run_dir}\n\n{warning_text}",
+                self._set_inline_feedback(
+                    "Completed",
+                    f"Finished with {fallback_count} flagged lines.",
+                    success="Translation finished with review flags.",
+                    warning=warning_text,
                 )
+                self._set_busy(False, self.status_var.get())
+                self._open_path(run_dir)
                 return
 
-            self.warning_var.set("")
-            self._set_busy(False, f"Output saved to {run_dir}")
+            self._set_inline_feedback(
+                "Completed",
+                f"Output saved to {run_dir}",
+                success="Translation finished successfully.",
+            )
+            self._set_busy(False, self.status_var.get())
             self._open_path(run_dir)
-            messagebox.showinfo("Translation complete", f"Your files are ready in:\n{run_dir}")
             return
 
         if event == "translation-error":
             self.progress_var.set(0)
             self.progress_text_var.set("Translation failed")
-            self.success_var.set("")
-            self.warning_var.set("")
-            self._set_busy(False, "Translation failed.")
-            messagebox.showerror("Translation error", str(payload))
+            self._set_inline_feedback("Error", "Translation failed.", warning=str(payload))
+            self._set_busy(False, self.status_var.get())
             return
 
         if event == "runtime-info":
@@ -1175,6 +1272,7 @@ class DesktopApp(tk.Tk):
     def _set_busy(self, busy: bool, status: str) -> None:
         self.status_var.set(status)
         self.translate_button.configure(state="disabled" if busy else "normal")
+        self.translate_button.configure(text="Processing..." if busy else "Translate")
 
     def _resolve_subtitle_limit(self) -> int | None:
         raw_limit = self.limit_var.get().strip()
@@ -1192,10 +1290,13 @@ class DesktopApp(tk.Tk):
 
     def _reset_runtime_insights(self) -> None:
         self.processed_subtitle_total = 0
+        self.status_state_var.set("Ready")
         self.device_var.set("Runtime: waiting")
         self.total_time_var.set("Total time: --")
         self.batch_time_var.set("Latest batch: --")
         self.processed_count_var.set("Subtitles processed: 0")
+        self.success_var.set("")
+        self.warning_var.set("")
         self._clear_debug_output()
 
     def _clear_debug_output(self) -> None:

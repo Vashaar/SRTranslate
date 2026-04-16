@@ -60,7 +60,7 @@ LANGUAGE_LABELS = {
 
 def run_lmstudio_provider_test(config: AppConfig | None = None) -> dict[str, object]:
     provider_settings = config.provider_settings("lmstudio") if config is not None else {}
-    base_url = str(provider_settings.get("base_url", "http://localhost:1234/v1"))
+    base_url = str(provider_settings.get("base_url", "http://127.0.0.1:1234/v1"))
     model = str(provider_settings.get("model", "qwen2.5-7b-instruct"))
     return run_lmstudio_inference_test(base_url=base_url, model=model)
 

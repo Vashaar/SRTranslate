@@ -7,14 +7,14 @@ style_profile: balanced
 preserve_timing: true
 deen_mode: false
 lmstudio:
-  base_url: http://localhost:1234/v1
+  base_url: http://127.0.0.1:1234/v1
   model: qwen2.5-7b-instruct
 runtime:
   prefer_gpu: true
   precision: auto
 providers:
   lmstudio:
-    base_url: http://localhost:1234/v1
+    base_url: http://127.0.0.1:1234/v1
     model: qwen2.5-7b-instruct
   openai:
     model: gpt-5-mini
