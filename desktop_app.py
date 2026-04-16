@@ -1,6 +1,4 @@
 from __future__ import annotations
-
-import json
 import logging
 import os
 import queue
@@ -108,14 +106,21 @@ class DesktopApp(tk.Tk):
         self.review_mode_var = tk.BooleanVar(
             value=bool(default_config.raw.get("output", {}).get("write_review_csv", True))
         )
+        self.test_mode_var = tk.BooleanVar(value=False)
+        self.limit_var = tk.StringVar(value="")
         self.status_var = tk.StringVar(value="Select an SRT file to begin.")
         self.output_var = tk.StringVar(value=str(self.output_base_dir))
         self.progress_var = tk.DoubleVar(value=0.0)
         self.progress_text_var = tk.StringVar(value="Waiting to start")
+        self.device_var = tk.StringVar(value="Runtime: waiting")
+        self.total_time_var = tk.StringVar(value="Total time: --")
+        self.batch_time_var = tk.StringVar(value="Latest batch: --")
+        self.processed_count_var = tk.StringVar(value="Subtitles processed: 0")
         self.success_var = tk.StringVar(value="")
         self.warning_var = tk.StringVar(value="")
         self.advanced_open = tk.BooleanVar(value=False)
         self.advanced_button_var = tk.StringVar(value="More Options")
+        self.processed_subtitle_total = 0
 
         self._configure_theme()
         self._load_branding()
@@ -306,6 +311,7 @@ class DesktopApp(tk.Tk):
         body = ttk.Frame(parent, style="App.TFrame")
         body.grid(row=1, column=0, sticky="nsew", pady=(16, 0))
         body.columnconfigure(0, weight=1)
+        body.rowconfigure(4, weight=1)
 
         actions = ttk.LabelFrame(body, text="Start", padding=16)
         actions.grid(row=0, column=0, sticky="ew")
@@ -371,9 +377,21 @@ class DesktopApp(tk.Tk):
             state="readonly",
         ).grid(row=0, column=1, sticky="ew", pady=(0, 12))
 
-        ttk.Label(self.advanced_frame, text="Target languages").grid(row=1, column=0, sticky="w")
+        ttk.Checkbutton(
+            self.advanced_frame,
+            text="Test Mode",
+            variable=self.test_mode_var,
+        ).grid(row=1, column=0, columnspan=2, sticky="w", pady=(0, 10))
+
+        ttk.Label(self.advanced_frame, text="Limit").grid(row=2, column=0, sticky="w")
+        ttk.Entry(
+            self.advanced_frame,
+            textvariable=self.limit_var,
+        ).grid(row=2, column=1, sticky="ew", pady=(0, 12))
+
+        ttk.Label(self.advanced_frame, text="Target languages").grid(row=3, column=0, sticky="w")
         language_panel = ttk.Frame(self.advanced_frame, style="Panel.TFrame")
-        language_panel.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(8, 14))
+        language_panel.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(8, 14))
         self.language_vars: dict[str, tk.BooleanVar] = {}
         for index, language in enumerate(self.language_options):
             variable = tk.BooleanVar(value=False)
@@ -384,16 +402,16 @@ class DesktopApp(tk.Tk):
                 variable=variable,
             ).grid(row=index // 2, column=index % 2, sticky="w", padx=(0, 18), pady=4)
 
-        ttk.Label(self.advanced_frame, text="Glossary").grid(row=3, column=0, sticky="w")
+        ttk.Label(self.advanced_frame, text="Glossary").grid(row=5, column=0, sticky="w")
         self.dictionary_combo = ttk.Combobox(
             self.advanced_frame,
             textvariable=self.dictionary_var,
             state="readonly",
         )
-        self.dictionary_combo.grid(row=3, column=1, sticky="ew", pady=(0, 10))
+        self.dictionary_combo.grid(row=5, column=1, sticky="ew", pady=(0, 10))
 
         glossary_actions = ttk.Frame(self.advanced_frame, style="Panel.TFrame")
-        glossary_actions.grid(row=4, column=0, columnspan=2, sticky="w", pady=(0, 10))
+        glossary_actions.grid(row=6, column=0, columnspan=2, sticky="w", pady=(0, 10))
         ttk.Button(
             glossary_actions,
             text="Refresh Glossaries",
@@ -407,9 +425,9 @@ class DesktopApp(tk.Tk):
 
         ttk.Checkbutton(
             self.advanced_frame,
-            text="Create review spreadsheet",
+            text="Review mode (in-memory only)",
             variable=self.review_mode_var,
-        ).grid(row=5, column=0, columnspan=2, sticky="w")
+        ).grid(row=7, column=0, columnspan=2, sticky="w")
 
         self.advanced_frame.grid_remove()
 
@@ -439,8 +457,17 @@ class DesktopApp(tk.Tk):
             sticky="w",
             pady=(6, 0),
         )
+        metrics = ttk.Frame(status, style="App.TFrame")
+        metrics.grid(row=3, column=0, sticky="ew", pady=(12, 0))
+        metrics.columnconfigure(0, weight=1)
+        metrics.columnconfigure(1, weight=1)
+        ttk.Label(metrics, textvariable=self.device_var, style="Muted.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(metrics, textvariable=self.total_time_var, style="Muted.TLabel").grid(row=0, column=1, sticky="w")
+        ttk.Label(metrics, textvariable=self.batch_time_var, style="Muted.TLabel").grid(row=1, column=0, sticky="w", pady=(4, 0))
+        ttk.Label(metrics, textvariable=self.processed_count_var, style="Muted.TLabel").grid(row=1, column=1, sticky="w", pady=(4, 0))
+
         ttk.Label(status, text="Output folder", style="Muted.TLabel").grid(
-            row=3,
+            row=4,
             column=0,
             sticky="w",
             pady=(12, 0),
@@ -451,21 +478,44 @@ class DesktopApp(tk.Tk):
             style="Muted.TLabel",
             wraplength=780,
             justify="left",
-        ).grid(row=4, column=0, sticky="w", pady=(4, 0))
+        ).grid(row=5, column=0, sticky="w", pady=(4, 0))
         ttk.Label(
             status,
             textvariable=self.success_var,
             style="Success.TLabel",
             wraplength=780,
             justify="left",
-        ).grid(row=5, column=0, sticky="w", pady=(12, 0))
+        ).grid(row=6, column=0, sticky="w", pady=(12, 0))
         ttk.Label(
             status,
             textvariable=self.warning_var,
             style="Warning.TLabel",
             wraplength=780,
             justify="left",
-        ).grid(row=6, column=0, sticky="w", pady=(8, 0))
+        ).grid(row=7, column=0, sticky="w", pady=(8, 0))
+
+        debug_panel = ttk.LabelFrame(body, text="Debug Output", padding=10)
+        debug_panel.grid(row=4, column=0, sticky="nsew", pady=(14, 0))
+        debug_panel.columnconfigure(0, weight=1)
+        debug_panel.rowconfigure(0, weight=1)
+
+        self.debug_text = tk.Text(
+            debug_panel,
+            height=12,
+            wrap="word",
+            bg=THEME["entry"],
+            fg=THEME["text"],
+            insertbackground=THEME["text"],
+            highlightbackground=THEME["entry_border"],
+            relief="flat",
+            font=("Consolas", 10),
+        )
+        self.debug_text.grid(row=0, column=0, sticky="nsew")
+        self.debug_text.configure(state="disabled")
+
+        debug_scrollbar = ttk.Scrollbar(debug_panel, orient="vertical", command=self.debug_text.yview)
+        debug_scrollbar.grid(row=0, column=1, sticky="ns")
+        self.debug_text.configure(yscrollcommand=debug_scrollbar.set)
 
     def _select_default_languages(self) -> None:
         if "ar" in self.language_vars:
@@ -584,6 +634,11 @@ class DesktopApp(tk.Tk):
         if not languages:
             messagebox.showerror("Missing target languages", "Choose at least one target language in More Options.")
             return
+        try:
+            subtitle_limit = self._resolve_subtitle_limit()
+        except ValueError as exc:
+            messagebox.showerror("Invalid limit", str(exc))
+            return
 
         self.current_output_dir = None
         self.current_artifacts = {}
@@ -592,6 +647,7 @@ class DesktopApp(tk.Tk):
         self.progress_text_var.set("Starting translation")
         self.success_var.set("")
         self.warning_var.set("")
+        self._reset_runtime_insights()
         self._set_busy(True, "Running translation...")
 
         threading.Thread(
@@ -604,6 +660,7 @@ class DesktopApp(tk.Tk):
                 self.preset_var.get(),
                 self.review_mode_var.get(),
                 str(self.output_base_dir),
+                subtitle_limit,
             ),
             daemon=True,
         ).start()
@@ -617,6 +674,7 @@ class DesktopApp(tk.Tk):
         preset_name: str,
         review_mode: bool,
         output_dir: str,
+        subtitle_limit: int | None,
     ) -> None:
         def report_progress(current: int, total: int, message: str) -> None:
             self.event_queue.put(
@@ -626,6 +684,66 @@ class DesktopApp(tk.Tk):
                         "current": current,
                         "total": total,
                         "message": message,
+                    },
+                )
+            )
+
+        def report_debug_mapping(language: str, index: int, source_text: str, translated_text: str) -> None:
+            self.event_queue.put(
+                (
+                    "debug-log",
+                    {
+                        "language": language,
+                        "index": index,
+                        "source_text": source_text,
+                        "translated_text": translated_text,
+                    },
+                )
+            )
+
+        def report_runtime_info(device: str, precision: str) -> None:
+            self.event_queue.put(
+                (
+                    "runtime-info",
+                    {
+                        "device": device,
+                        "precision": precision,
+                    },
+                )
+            )
+
+        def report_batch_metrics(
+            language: str,
+            current_batch: int,
+            total_batches: int,
+            subtitle_count: int,
+            elapsed_seconds: float,
+        ) -> None:
+            self.event_queue.put(
+                (
+                    "batch-metric",
+                    {
+                        "language": language,
+                        "current_batch": current_batch,
+                        "total_batches": total_batches,
+                        "subtitle_count": subtitle_count,
+                        "elapsed_seconds": elapsed_seconds,
+                    },
+                )
+            )
+
+        def report_performance_summary(
+            total_runtime: float,
+            average_batch_time: float,
+            processed_subtitles: int,
+        ) -> None:
+            self.event_queue.put(
+                (
+                    "performance-summary",
+                    {
+                        "total_runtime": total_runtime,
+                        "average_batch_time": average_batch_time,
+                        "processed_subtitles": processed_subtitles,
                     },
                 )
             )
@@ -653,6 +771,12 @@ class DesktopApp(tk.Tk):
                 profile=style_profile,
                 review_mode=review_mode,
                 progress_callback=report_progress,
+                subtitle_limit=subtitle_limit,
+                debug_mapping_callback=report_debug_mapping,
+                debug_performance=True,
+                runtime_info_callback=report_runtime_info,
+                batch_metrics_callback=report_batch_metrics,
+                performance_summary_callback=report_performance_summary,
             )
             self.event_queue.put(("translation-success", (run_dir, artifacts)))
         except Exception as exc:
@@ -786,30 +910,18 @@ class DesktopApp(tk.Tk):
         fallback_count = 0
         for artifact in artifacts.values():
             try:
-                payload = json.loads(artifact.report_path.read_text(encoding="utf-8"))
-            except Exception:
-                logger.exception("Could not read translation report from %s", artifact.report_path)
-                continue
-            summary = payload.get("summary", {})
-            try:
-                fallback_count += int(summary.get("fallback_count", 0))
+                fallback_count += int(artifact.report.summary.get("fallback_count", 0))
             except (TypeError, ValueError):
-                logger.warning("Invalid fallback count in report %s", artifact.report_path)
+                logger.warning("Invalid fallback count for language %s", artifact.language)
         return fallback_count
 
     def _count_total_blocks(self, artifacts: dict[str, LanguageArtifacts]) -> int:
         total_blocks = 0
         for artifact in artifacts.values():
             try:
-                payload = json.loads(artifact.report_path.read_text(encoding="utf-8"))
-            except Exception:
-                logger.exception("Could not read translation report from %s", artifact.report_path)
-                continue
-            summary = payload.get("summary", {})
-            try:
-                total_blocks += int(summary.get("translated_blocks", 0))
+                total_blocks += int(artifact.report.summary.get("translated_blocks", 0))
             except (TypeError, ValueError):
-                logger.warning("Invalid translated block count in report %s", artifact.report_path)
+                logger.warning("Invalid translated block count for language %s", artifact.language)
         return total_blocks
 
     def _poll_events(self) -> None:
@@ -909,10 +1021,104 @@ class DesktopApp(tk.Tk):
             self.warning_var.set("")
             self._set_busy(False, "Translation failed.")
             messagebox.showerror("Translation error", str(payload))
+            return
+
+        if event == "runtime-info":
+            runtime_payload = payload
+            device = str(runtime_payload["device"]).upper()
+            precision = str(runtime_payload["precision"]).lower()
+            if device == "GPU":
+                label = f"Running on GPU ({precision})"
+            else:
+                label = "Running on CPU"
+            self.device_var.set(label)
+            self._append_debug_line(f"[runtime] {label}")
+            return
+
+        if event == "batch-metric":
+            metric_payload = payload
+            language = str(metric_payload["language"]).upper()
+            current_batch = int(metric_payload["current_batch"])
+            total_batches = int(metric_payload["total_batches"])
+            subtitle_count = int(metric_payload["subtitle_count"])
+            elapsed_seconds = float(metric_payload["elapsed_seconds"])
+            self.processed_subtitle_total += subtitle_count
+            self.batch_time_var.set(
+                f"Latest batch: {language} {current_batch}/{total_batches} in {elapsed_seconds:.2f}s"
+            )
+            self.processed_count_var.set(f"Subtitles processed: {self.processed_subtitle_total}")
+            self._append_debug_line(
+                f"[perf] {language} batch {current_batch}/{total_batches}: "
+                f"{subtitle_count} subtitles in {elapsed_seconds:.2f}s"
+            )
+            return
+
+        if event == "performance-summary":
+            summary_payload = payload
+            total_runtime = float(summary_payload["total_runtime"])
+            average_batch_time = float(summary_payload["average_batch_time"])
+            processed_subtitles = int(summary_payload["processed_subtitles"])
+            self.total_time_var.set(
+                f"Total time: {total_runtime:.2f}s (avg batch {average_batch_time:.2f}s)"
+            )
+            self.processed_count_var.set(f"Subtitles processed: {processed_subtitles}")
+            self._append_debug_line(
+                f"[perf] total runtime {total_runtime:.2f}s | avg batch {average_batch_time:.2f}s"
+            )
+            return
+
+        if event == "debug-log":
+            debug_payload = payload
+            index = int(debug_payload["index"])
+            source_text = " | ".join(
+                line.strip()
+                for line in str(debug_payload["source_text"]).splitlines()
+                if line.strip()
+            )
+            translated_text = " | ".join(
+                line.strip()
+                for line in str(debug_payload["translated_text"]).splitlines()
+                if line.strip()
+            )
+            self._append_debug_line(f"[{index}] INPUT: {source_text}")
+            self._append_debug_line(f"[{index}] OUTPUT: {translated_text}")
 
     def _set_busy(self, busy: bool, status: str) -> None:
         self.status_var.set(status)
         self.translate_button.configure(state="disabled" if busy else "normal")
+
+    def _resolve_subtitle_limit(self) -> int | None:
+        raw_limit = self.limit_var.get().strip()
+        if raw_limit:
+            try:
+                value = int(raw_limit)
+            except ValueError as exc:
+                raise ValueError("Limit must be a whole number.") from exc
+            if value <= 0:
+                raise ValueError("Limit must be greater than 0.")
+            return value
+        if self.test_mode_var.get():
+            return 20
+        return None
+
+    def _reset_runtime_insights(self) -> None:
+        self.processed_subtitle_total = 0
+        self.device_var.set("Runtime: waiting")
+        self.total_time_var.set("Total time: --")
+        self.batch_time_var.set("Latest batch: --")
+        self.processed_count_var.set("Subtitles processed: 0")
+        self._clear_debug_output()
+
+    def _clear_debug_output(self) -> None:
+        self.debug_text.configure(state="normal")
+        self.debug_text.delete("1.0", tk.END)
+        self.debug_text.configure(state="disabled")
+
+    def _append_debug_line(self, line: str) -> None:
+        self.debug_text.configure(state="normal")
+        self.debug_text.insert(tk.END, f"{line}\n")
+        self.debug_text.see(tk.END)
+        self.debug_text.configure(state="disabled")
 
     @staticmethod
     def _open_path(path: Path) -> None:

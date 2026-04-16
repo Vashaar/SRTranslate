@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -12,6 +13,8 @@ from translator.providers.structured import (
     TRANSLATION_JSON_CONTRACT,
     parse_batch_translation_payload,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _gpu_available() -> bool:
@@ -52,6 +55,7 @@ class OllamaTranslationProvider(TranslationProvider):
         self.model = model
         detected_gpu = _gpu_available()
         self.gpu_available = prefer_gpu and detected_gpu
+        self.device = "GPU" if self.gpu_available else "CPU"
         normalized_precision = str(precision or "auto").lower()
         if normalized_precision not in {"auto", "fp16", "fp32"}:
             normalized_precision = "auto"
@@ -59,6 +63,13 @@ class OllamaTranslationProvider(TranslationProvider):
             self.precision = "fp16" if self.gpu_available else "fp32"
         else:
             self.precision = normalized_precision
+        self.num_gpu_layers = -1 if self.gpu_available else 0
+        logger.info(
+            "Ollama runtime configured: device=%s precision=%s num_gpu_layers=%s",
+            self.device,
+            self.precision,
+            self.num_gpu_layers,
+        )
 
     def translate_batch(self, request_payload: BatchTranslationRequest) -> list[TranslationResult]:
         target_language = request_payload.target_language_name or request_payload.target_language
@@ -112,6 +123,8 @@ Batch:
             "options": {
                 "temperature": 0.0,
                 "f16_kv": self.precision == "fp16",
+                "num_gpu": self.num_gpu_layers,
+                "main_gpu": 0 if self.gpu_available else -1,
             },
         }
         body = json.dumps(payload).encode("utf-8")
@@ -139,7 +152,9 @@ Batch:
             "base_url": self.base_url,
             "batch_size": len(request_payload.items),
             "gpu_enabled": self.gpu_available,
+            "device": self.device,
             "precision": self.precision,
+            "num_gpu_layers": self.num_gpu_layers,
             "structured_output": parsed.metadata(),
         }
         results: list[TranslationResult] = []

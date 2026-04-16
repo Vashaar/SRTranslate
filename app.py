@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import uuid
 from pathlib import Path
 
@@ -47,11 +46,18 @@ def render_preview(language: str, artifacts: LanguageArtifacts) -> None:
 
 
 def render_flags(language: str, artifacts: LanguageArtifacts) -> None:
-    flags_text = artifacts.flags_path.read_text(encoding="utf-8")
-    if flags_text.strip() == "No issues flagged.":
+    if not artifacts.report.issues:
         st.success(f"{language_label(language)}: no issues flagged.")
     else:
         st.warning(f"{language_label(language)} flagged issues")
+        flags_text = "\n".join(
+            (
+                f"[{issue.severity.upper()}] "
+                f"{f'Block {issue.block_index}' if issue.block_index else 'Global'} "
+                f"{issue.code}: {issue.message}"
+            )
+            for issue in artifacts.report.issues
+        )
         st.code(flags_text, language="text")
 
 
@@ -63,32 +69,6 @@ def render_downloads(language: str, artifacts: LanguageArtifacts) -> None:
         mime="application/x-subrip",
         key=f"srt-{language}",
     )
-    st.download_button(
-        label=f"Download {language}.report.json",
-        data=artifacts.report_path.read_bytes(),
-        file_name=artifacts.report_path.name,
-        mime="application/json",
-        key=f"report-{language}",
-    )
-    st.download_button(
-        label=f"Download {language}.flags.txt",
-        data=artifacts.flags_path.read_bytes(),
-        file_name=artifacts.flags_path.name,
-        mime="text/plain",
-        key=f"flags-{language}",
-    )
-    if artifacts.review_path is not None and artifacts.review_path.exists():
-        st.download_button(
-            label=f"Download {language}.review.csv",
-            data=artifacts.review_path.read_bytes(),
-            file_name=artifacts.review_path.name,
-            mime="text/csv",
-            key=f"review-{language}",
-        )
-
-
-def load_report_summary(artifacts: LanguageArtifacts) -> dict[str, object]:
-    return json.loads(artifacts.report_path.read_text(encoding="utf-8"))
 
 
 def run_translation(
@@ -134,7 +114,7 @@ def main() -> None:
         layout="wide",
     )
     st.title("SRTranslate")
-    st.caption("Translate SRT subtitles with script-aware context, verification, and review artifacts.")
+    st.caption("Translate SRT subtitles with script-aware context and in-memory verification insights.")
 
     with st.sidebar:
         st.header("Inputs")
@@ -148,7 +128,7 @@ def main() -> None:
             format_func=language_label,
         )
         style_profile = st.selectbox("Translation style", STYLE_OPTIONS, index=1)
-        review_mode = st.toggle("Review mode", value=True)
+        review_mode = st.toggle("Review mode (in-memory only)", value=True)
         run_clicked = st.button("Start translation", type="primary", use_container_width=True)
 
     if run_clicked:
@@ -184,13 +164,13 @@ def main() -> None:
         st.header("Outputs")
         for language in selected_languages:
             language_artifacts = artifacts[language]
-            report = load_report_summary(language_artifacts)
+            report = language_artifacts.report
             with st.container(border=True):
                 st.subheader(language_label(language))
                 c1, c2, c3 = st.columns(3)
-                c1.metric("Passed", "Yes" if report["passed"] else "Needs review")
-                c2.metric("Issues", int(report["summary"]["issue_count"]))
-                c3.metric("Avg confidence", report["summary"]["average_confidence"])
+                c1.metric("Passed", "Yes" if report.passed else "Needs review")
+                c2.metric("Issues", int(report.summary.get("issue_count", len(report.issues))))
+                c3.metric("Avg confidence", report.summary.get("average_confidence", "--"))
                 render_downloads(language, language_artifacts)
                 render_preview(language, language_artifacts)
                 render_flags(language, language_artifacts)

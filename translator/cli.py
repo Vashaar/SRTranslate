@@ -41,7 +41,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--review-mode",
         action="store_true",
-        help="Write review CSV even if disabled in config",
+        help="Enable extra in-memory review checks without generating spreadsheet exports.",
+    )
+    parser.add_argument(
+        "--debug-performance",
+        action="store_true",
+        help="Print total runtime and average time per batch.",
     )
     parser.add_argument(
         "--log-level",
@@ -89,6 +94,7 @@ def main() -> int:
         review_mode=args.review_mode,
         subtitle_limit=subtitle_limit,
         debug_mapping_callback=emit_debug_mapping,
+        debug_performance=args.debug_performance,
     )
     for lang, path in outputs.items():
         print(f"{lang}: {path}")

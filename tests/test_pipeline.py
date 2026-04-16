@@ -7,7 +7,7 @@ from translator.config import load_config
 from translator.pipeline import translate_project
 
 
-def test_pipeline_creates_expected_outputs(tmp_path: Path) -> None:
+def test_pipeline_creates_only_srt_output(tmp_path: Path) -> None:
     srt = tmp_path / "input.srt"
     script = tmp_path / "script.txt"
     config = tmp_path / "config.yaml"
@@ -37,9 +37,9 @@ def test_pipeline_creates_expected_outputs(tmp_path: Path) -> None:
 
     assert "ur" in outputs
     assert (out_dir / "input.ur.srt").exists()
-    assert (out_dir / "input.ur.report.json").exists()
-    assert (out_dir / "input.ur.review.csv").exists()
-    assert (out_dir / "input.ur.flags.txt").exists()
+    assert not (out_dir / "input.ur.report.json").exists()
+    assert not (out_dir / "input.ur.review.csv").exists()
+    assert not (out_dir / "input.ur.flags.txt").exists()
 
 
 def test_pipeline_supports_manual_provider(tmp_path: Path) -> None:

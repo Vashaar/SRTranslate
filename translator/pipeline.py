@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -23,7 +24,7 @@ from translator.models import (
     VerificationIssue,
     VerificationReport,
 )
-from translator.reporting import ensure_output_dir, write_flags, write_report, write_review_csv, write_srt
+from translator.reporting import ensure_output_dir, write_srt
 from translator.text import clean_translated_text, is_rtl_language, normalize_text, rebalance_subtitle_lines
 from translator.providers.manual_provider import ManualTranslationProvider
 from verifier.validation import validate_and_repair_translation
@@ -31,6 +32,9 @@ from verifier.validation import validate_and_repair_translation
 logger = logging.getLogger(__name__)
 ProgressCallback = Callable[[int, int, str], None]
 DebugMappingCallback = Callable[[str, int, str, str], None]
+RuntimeInfoCallback = Callable[[str, str], None]
+BatchMetricsCallback = Callable[[str, int, int, int, float], None]
+PerformanceSummaryCallback = Callable[[float, float, int], None]
 LANGUAGE_LABELS = {
     "ar": "Arabic",
     "bn": "Bengali",
@@ -56,6 +60,10 @@ def translate_project(
     progress_callback: ProgressCallback | None = None,
     subtitle_limit: int | None = None,
     debug_mapping_callback: DebugMappingCallback | None = None,
+    debug_performance: bool = False,
+    runtime_info_callback: RuntimeInfoCallback | None = None,
+    batch_metrics_callback: BatchMetricsCallback | None = None,
+    performance_summary_callback: PerformanceSummaryCallback | None = None,
 ) -> dict[str, Path]:
     artifacts = translate_project_with_artifacts(
         srt_path=srt_path,
@@ -68,6 +76,10 @@ def translate_project(
         progress_callback=progress_callback,
         subtitle_limit=subtitle_limit,
         debug_mapping_callback=debug_mapping_callback,
+        debug_performance=debug_performance,
+        runtime_info_callback=runtime_info_callback,
+        batch_metrics_callback=batch_metrics_callback,
+        performance_summary_callback=performance_summary_callback,
     )
     return {lang: result.srt_path for lang, result in artifacts.items()}
 
@@ -83,7 +95,12 @@ def translate_project_with_artifacts(
     progress_callback: ProgressCallback | None = None,
     subtitle_limit: int | None = None,
     debug_mapping_callback: DebugMappingCallback | None = None,
+    debug_performance: bool = False,
+    runtime_info_callback: RuntimeInfoCallback | None = None,
+    batch_metrics_callback: BatchMetricsCallback | None = None,
+    performance_summary_callback: PerformanceSummaryCallback | None = None,
 ) -> dict[str, LanguageArtifacts]:
+    started_at = time.perf_counter()
     source_blocks = parse_srt(srt_path)
     original_block_count = len(source_blocks)
     if subtitle_limit is not None:
@@ -112,11 +129,18 @@ def translate_project_with_artifacts(
     advance("Aligned subtitles to script context")
     glossary = load_glossary(glossary_path or config.raw.get("glossary", {}).get("default_path"))
     provider = _build_provider_with_fallback(config)
+    device = str(getattr(provider, "device", "CPU"))
+    precision = str(getattr(provider, "precision", "fp32"))
+    logger.info("Translation runtime device: %s", device)
+    logger.info("Translation runtime precision: %s", precision)
+    if runtime_info_callback is not None:
+        runtime_info_callback(device, precision)
 
     output_dir = config.output_dir
     ensure_output_dir(output_dir)
     srt_stem = Path(srt_path).stem
 
+    batch_timings: list[float] = []
     results: dict[str, LanguageArtifacts] = {}
     for lang in langs:
         logger.info("Translating language %s", lang)
@@ -138,6 +162,9 @@ def translate_project_with_artifacts(
             language_config=language_config,
             batch_ranges=batch_ranges,
             progress_callback=language_progress,
+            batch_timings=batch_timings,
+            debug_mapping_callback=debug_mapping_callback,
+            batch_metrics_callback=batch_metrics_callback,
         )
         current_step += len(batch_ranges)
         validation = validate_and_repair_translation(
@@ -161,39 +188,34 @@ def translate_project_with_artifacts(
         advance(f"{lang.upper()}: validation complete")
         corrected_blocks = validation.corrected_blocks
         report = _augment_report_with_fallbacks(validation.report, fallback_block_indices)
-        if debug_mapping_callback is not None:
-            for source_block, corrected_block in zip(source_blocks, corrected_blocks, strict=True):
-                debug_mapping_callback(
-                    language_config.code,
-                    source_block.index,
-                    source_block.text,
-                    corrected_block.text,
-                )
-
         file_stem = _build_output_stem(srt_stem, lang)
         output_srt = output_dir / f"{file_stem}.srt"
-        output_report = output_dir / f"{file_stem}.report.json"
-        output_review = output_dir / f"{file_stem}.review.csv"
-        output_flags = output_dir / f"{file_stem}.flags.txt"
-
         write_srt(output_srt, corrected_blocks)
-        write_report(output_report, report)
-        write_flags(output_flags, report)
-        if review_mode or config.raw.get("output", {}).get("write_review_csv", True):
-            write_review_csv(output_review, source_blocks, corrected_blocks, alignments, translations)
-            review_path: Path | None = output_review
-        else:
-            review_path = None
-        advance(f"{lang.upper()}: wrote output files")
+        advance(f"{lang.upper()}: wrote SRT output")
 
         results[lang] = LanguageArtifacts(
             language=lang,
             srt_path=output_srt,
-            report_path=output_report,
-            review_path=review_path,
-            flags_path=output_flags,
+            report=report,
         )
         advance(f"{lang.upper()}: ready")
+    if debug_performance:
+        total_runtime = time.perf_counter() - started_at
+        average_batch_time = sum(batch_timings) / len(batch_timings) if batch_timings else 0.0
+        logger.info("Total runtime: %.2fs", total_runtime)
+        logger.info("Average time per batch: %.2fs", average_batch_time)
+        if performance_summary_callback is not None:
+            performance_summary_callback(
+                total_runtime,
+                average_batch_time,
+                len(source_blocks) * len(langs),
+            )
+    elif performance_summary_callback is not None:
+        performance_summary_callback(
+            time.perf_counter() - started_at,
+            sum(batch_timings) / len(batch_timings) if batch_timings else 0.0,
+            len(source_blocks) * len(langs),
+        )
     return results
 
 
@@ -208,6 +230,9 @@ def _translate_language(
     language_config: LanguageConfig,
     batch_ranges: list[tuple[int, int]] | None = None,
     progress_callback: ProgressCallback | None = None,
+    batch_timings: list[float] | None = None,
+    debug_mapping_callback: DebugMappingCallback | None = None,
+    batch_metrics_callback: BatchMetricsCallback | None = None,
 ) -> tuple[list[SubtitleBlock], list[TranslationResult], list[int]]:
     translated_line_sets: list[list[str]] = []
     translation_results: list[TranslationResult] = []
@@ -219,6 +244,7 @@ def _translate_language(
     rtl = language_config.rtl
     batch_windows = batch_ranges or _window_ranges(len(source_blocks), config.translation_batch_size)
     for window_number, (start, end) in enumerate(batch_windows, start=1):
+        batch_started_at = time.perf_counter()
         batch_results = _translate_batch_window(
             source_blocks=source_blocks,
             alignments=alignments,
@@ -262,8 +288,34 @@ def _translate_language(
                 if config.line_rebalancing_enabled
                 else [line for line in result.translated_text.splitlines() if line.strip()] or [result.translated_text]
             )
+            if debug_mapping_callback is not None:
+                debug_mapping_callback(
+                    language_config.code,
+                    block.index,
+                    block.text,
+                    "\n".join(translated_lines),
+                )
             translated_line_sets.append(translated_lines)
             translation_results.append(result)
+        batch_elapsed = time.perf_counter() - batch_started_at
+        if batch_timings is not None:
+            batch_timings.append(batch_elapsed)
+        if batch_metrics_callback is not None:
+            batch_metrics_callback(
+                language_config.code,
+                window_number,
+                len(batch_windows),
+                end - start,
+                batch_elapsed,
+            )
+        logger.info(
+            "%s batch %s/%s processed %s subtitles in %.2fs",
+            language_config.code.upper(),
+            window_number,
+            len(batch_windows),
+            end - start,
+            batch_elapsed,
+        )
         if progress_callback is not None:
             progress_callback(
                 window_number,

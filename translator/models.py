@@ -118,6 +118,4 @@ class ValidationResult:
 class LanguageArtifacts:
     language: str
     srt_path: Path
-    report_path: Path
-    review_path: Path | None
-    flags_path: Path
+    report: VerificationReport
